@@ -12,8 +12,11 @@
 //   Umg604Driver           — Janitza UMG 604(-PRO)
 //   MeterHub               — Hauptmodul, lädt den Treiber laut Meter-Property
 //
-// Zähler werden nur gelesen (kein writeControl) — daher ist das Interface
-// schlanker als beim InverterHub.
+// Zähler werden überwiegend nur gelesen (kein writeControl) — daher ist das
+// Interface schlanker als beim InverterHub. Ausnahme seit 07.09.2026: die
+// beiden blue'Log-Sollwertkanäle (RPC/Power Control, MHUB_BlueLogRpcDriver/
+// MHUB_BlueLogPowerControlDriver) SCHREIBEN — über das optionale
+// MHUB_WritableMeterDriverInterface, das rein lesende Treiber nicht berührt.
 // ===========================================================================
 
 class MHUB_ModbusTcpClient
@@ -160,6 +163,60 @@ class MHUB_ModbusTcpClient
         $val = unpack('E', $raw);
         return (float)($val[1] ?? 0.0);
     }
+
+    // Float32 -> 2 Register, Gegenstück zu readFloat32() für Schreibzugriffe
+    // (blue'Log RPC/Power Control). Big-Endian (ABCD), bei $wordSwap
+    // getauscht (CDAB) — dieselbe Konvention wie beim Lesen.
+    public function packFloat32(float $value): array
+    {
+        $u = unpack('n2', pack('G', $value));
+        $w0 = $u[1];
+        $w1 = $u[2];
+        return $this->wordSwap ? [$w1, $w0] : [$w0, $w1];
+    }
+
+    // Write Multiple Registers (FC 0x10) — bisher rein lesendes Modul, jetzt
+    // erstmals ein Schreibzugriff (blue'Log RPC/Power Control Sollwerte).
+    // Rückgabe: Modbus-Exception oder Zeitüberschreitung -> false.
+    public function writeHolding($startReg, array $regs): bool
+    {
+        $sock = @fsockopen($this->host, $this->port, $errno, $errstr, 3.0);
+        if ($sock === false) {
+            return false;
+        }
+        stream_set_timeout($sock, 3);
+
+        $tid     = mt_rand(1, 65535);
+        $count   = count($regs);
+        $payload = '';
+        foreach ($regs as $r) {
+            $payload .= pack('n', $r & 0xFFFF);
+        }
+        $pdu  = pack('CnnC', 0x10, $startReg, $count, $count * 2) . $payload;
+        $mbap = pack('nnn', $tid, 0, strlen($pdu) + 1) . chr($this->unitId);
+
+        fwrite($sock, $mbap . $pdu);
+
+        $response = '';
+        $deadline = microtime(true) + 3.0;
+        while (microtime(true) < $deadline) {
+            $chunk = @fread($sock, 512);
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+            $response .= $chunk;
+            if (strlen($response) >= 12) {
+                break; // FC16-Antwort ist fix 12 Byte (MBAP 7 + FC 1 + Startreg 2 + Anzahl 2)
+            }
+        }
+        fclose($sock);
+
+        if (strlen($response) < 8) {
+            return false;
+        }
+        $rfc = ord($response[7]);
+        return !($rfc & 0x80) && $rfc === 0x10;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +248,24 @@ interface MHUB_MeterDriverInterface
 
     /** Liest die langsamen Werte (Energiezähler). */
     public function readSlow($mb, $hub);
+}
+
+// ---------------------------------------------------------------------------
+// MHUB_WritableMeterDriverInterface — optionaler Zusatzvertrag für Treiber,
+// die auch SCHREIBEN (bisher nur die beiden blue'Log-Sollwertkanäle RPC/Power
+// Control). Bewusst ein separates, optionales Interface statt einer
+// Erweiterung von MHUB_MeterDriverInterface — sonst bräuchten alle 15
+// bestehenden, rein lesenden Treiber eine leere Implementierung. MeterHub
+// prüft per `instanceof`, ob der aktuell gewählte Treiber schreibt.
+// ---------------------------------------------------------------------------
+
+interface MHUB_WritableMeterDriverInterface
+{
+    /** Schreibt den aktuellen Zielwert (Property „TargetSetpoint") auf das Gerät. */
+    public function writeSetpoint($mb, $hub): void;
+
+    /** Schreibt den Ausfall-/Rückfallwert (Property „FailsafeDefaultPercent"), einmalig beim Deaktivieren. */
+    public function writeFailsafe($mb, $hub): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -2295,6 +2370,149 @@ class MHUB_BlueLogScadaMeterDriver implements MHUB_MeterDriverInterface
 }
 
 // ---------------------------------------------------------------------------
+// MHUB_BlueLogRpcDriver — Meteocontrol blue'Log, Remote Power Control (RPC),
+// Slave-ID 10. Für den Direktvermarkter/„3rd party" gedachte Sollwert-
+// Schnittstelle — genau diese Rolle übernimmt eine Instanz mit diesem
+// Zählertyp. Ersetzt (Dietmars ausdrücklicher Auftrag, 07.09.2026, nach
+// Rücksprache mit ModbusSlave/EMS) die bisher in Ad-hoc-PHP-Skripten
+// vergrabene „Regelung der blue'Log Master"-Logik seines Solarparks.
+//
+// MeterHub übernimmt bewusst NUR das Halten/Schreiben des Sollwerts — die
+// eigentliche Berechnung (z. B. kapazitätsgewichtete Aggregation mehrerer
+// Direktvermarkter-Quellwerte) bleibt außerhalb: ein Skript/EMS ruft
+// `MHUB_SetBlueLogTarget($id, $wert)`.
+//
+// ⚠️ Schreibt auf ein reales Kontrollinterface einer kommerziellen Anlage.
+// Kollidiert mit jedem anderen System, das denselben Kanal (Slave-ID 10)
+// bereits bedient — vor der ersten Aktivierung sicherstellen, dass kein
+// zweiter Schreiber aktiv ist (siehe Formular-Warnung).
+//
+// Sicherheitsnetz des blue'Log selbst: ein geschriebener Sollwert bleibt nur
+// die Gültigkeitszeit (Register 5006, hier konfigurierbar) lang wirksam und
+// fällt danach automatisch in den Normalbetrieb zurück, wenn niemand
+// nachschreibt — deshalb schreibt dieser Treiber bei JEDEM Zyklus erneut,
+// auch wenn sich der Zielwert nicht geändert hat.
+// ---------------------------------------------------------------------------
+
+class MHUB_BlueLogRpcDriver implements MHUB_MeterDriverInterface, MHUB_WritableMeterDriverInterface
+{
+    public function getBaseVars()
+    {
+        return [
+            ['power_total',        'Einspeiseleistung (Ist)',        'F', 'NRG.Watt', true,  'total', 'FC3 2 (PPC_P_AC_FEED_IN)'],
+            ['active_setpoint_rel', 'Wirksamer Sollwert (Ist, %)',    'F', 'NRG.Percent', false, 'total', 'FC3 8 (PPC_P_SET_RPC_REL)'],
+            ['frequency',          'Netzfrequenz',                   'F', 'MHB.Hz',   false, 'total', 'FC3 42 (PPC_F_AC)'],
+            ['connected',          'Verbindung',                     'B', '~Alert.Reversed', false, 'errors', ''],
+        ];
+    }
+
+    public function getOptionalGroups() { return []; }
+    public function getProfiles()       { return []; }
+    public function getEnumProfiles()   { return []; }
+
+    public function readFast($mb, $hub)
+    {
+        $mb->setWordSwap(true);
+        $r = $mb->readHolding(0, 44); // 0..43, deckt FEED_IN(2)/RPC_REL(8)/F_AC(42) ab
+        if ($r === null) {
+            $hub->SetVarBool('connected', false);
+            return false;
+        }
+        $hub->SetVarBool('connected', true);
+        // Herstellerkonvention: negativ = Bezug, positiv = Einspeisung — genau
+        // umgekehrt zu MeterHubs eigener Konvention (+ = Bezug). Fest
+        // invertiert, kein Fall für den nutzerseitigen PowerInvert-Schalter
+        // (der ist für Verdrahtungsfehler gedacht, nicht für eine pro
+        // Schnittstelle fest umgekehrte Herstellerkonvention).
+        $hub->SetVarFloat('power_total', -$mb->readFloat32($r, 2));   // 2
+        $hub->SetVarFloat('active_setpoint_rel', $mb->readFloat32($r, 8)); // 8
+        $hub->SetVarFloat('frequency', $mb->readFloat32($r, 42));     // 42
+        return true;
+    }
+
+    public function readSlow($mb, $hub) { /* keine kumulativen Energiezähler im RPC-Leseblock */ }
+
+    public function writeSetpoint($mb, $hub): void
+    {
+        $mb->setWordSwap(true);
+        $reg = $hub->SetpointMode() === 'abs' ? 5002 : 5000; // ABS bzw. REL
+        $mb->writeHolding($reg, $mb->packFloat32($hub->TargetSetpoint()));
+        // Gültigkeitszeit (Minuten) mitschreiben — unabhängig vom Poll-Takt
+        // dieser Instanz auf dem vom Nutzer gewünschten Wert gehalten.
+        $mb->writeHolding(5006, $mb->packFloat32((float)$hub->RpcValidTimeMin()));
+    }
+
+    public function writeFailsafe($mb, $hub): void
+    {
+        $mb->setWordSwap(true);
+        // Immer REL — ein universelles "Normalbetrieb"-Signal, unabhängig
+        // vom sonst gewählten Sollwert-Modus (ABS bräuchte die vereinbarte
+        // Anschlussleistung, um "voll" auszudrücken; REL 100 % ist eindeutig).
+        $mb->writeHolding(5000, $mb->packFloat32($hub->FailsafeDefaultPercent()));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MHUB_BlueLogPowerControlDriver — Meteocontrol blue'Log, Modbus Power
+// Control, Slave-ID 1. Für den NETZBETREIBER gedachte Sollwert-Schnittstelle
+// — anders als RPC übernimmt diese Instanz damit eine Rolle, die eigentlich
+// dem Netzbetreiber gehört. Nur aktivieren, wenn diese Rolle tatsächlich
+// zutrifft (siehe Formular-Warnung).
+//
+// ⚠️ Kein Watchdog/Gültigkeitszeit-Mechanismus laut Herstellerdoku (anders
+// als RPC) — ein gesetzter Wert bleibt stehen, bis er aktiv überschrieben
+// wird. Fällt MeterHub selbst aus, gibt es hier KEIN automatisches
+// Zurückfallen in den Normalbetrieb.
+// ---------------------------------------------------------------------------
+
+class MHUB_BlueLogPowerControlDriver implements MHUB_MeterDriverInterface, MHUB_WritableMeterDriverInterface
+{
+    public function getBaseVars()
+    {
+        return [
+            ['power_total', 'Wirkleistung (Ist, Netzübergabepunkt)', 'F', 'NRG.Watt', true,  'total', 'FC3 90 (PPC_P_AC)'],
+            ['frequency',   'Netzfrequenz',                          'F', 'MHB.Hz',   false, 'total', 'FC3 98 (PPC_F_AC)'],
+            ['connected',   'Verbindung',                            'B', '~Alert.Reversed', false, 'errors', ''],
+        ];
+    }
+
+    public function getOptionalGroups() { return []; }
+    public function getProfiles()       { return []; }
+    public function getEnumProfiles()   { return []; }
+
+    public function readFast($mb, $hub)
+    {
+        $mb->setWordSwap(true);
+        $r = $mb->readHolding(90, 10); // 90..99, deckt P_AC(90)/F_AC(98) ab
+        if ($r === null) {
+            $hub->SetVarBool('connected', false);
+            return false;
+        }
+        $hub->SetVarBool('connected', true);
+        // Herstellerkonvention: negativ = Bezug, positiv = Einspeisung — s.
+        // MHUB_BlueLogRpcDriver::readFast() für die Begründung der Invertierung.
+        $hub->SetVarFloat('power_total', -$mb->readFloat32($r, 0)); // 90
+        $hub->SetVarFloat('frequency', $mb->readFloat32($r, 8));    // 98
+        return true;
+    }
+
+    public function readSlow($mb, $hub) { /* keine kumulativen Energiezähler im gelesenen Block */ }
+
+    public function writeSetpoint($mb, $hub): void
+    {
+        $mb->setWordSwap(true);
+        $reg = $hub->SetpointMode() === 'abs' ? 5006 : 5000; // ABS bzw. REL
+        $mb->writeHolding($reg, $mb->packFloat32($hub->TargetSetpoint()));
+    }
+
+    public function writeFailsafe($mb, $hub): void
+    {
+        $mb->setWordSwap(true);
+        $mb->writeHolding(5000, $mb->packFloat32($hub->FailsafeDefaultPercent())); // immer REL
+    }
+}
+
+// ---------------------------------------------------------------------------
 // MeterHub — Hauptmodul, lädt den Treiber laut Meter-Property
 // ---------------------------------------------------------------------------
 
@@ -2323,6 +2541,8 @@ class MeterHub extends IPSModule
         'inexogy'          => 'MHUB_InexogyDriver',
         'bluelog_scada_inverter' => 'MHUB_BlueLogScadaInverterDriver',
         'bluelog_scada_meter'    => 'MHUB_BlueLogScadaMeterDriver',
+        'bluelog_rpc'            => 'MHUB_BlueLogRpcDriver',
+        'bluelog_powercontrol'   => 'MHUB_BlueLogPowerControlDriver',
     ];
 
     private const METER_LABELS = [
@@ -2348,6 +2568,8 @@ class MeterHub extends IPSModule
         'inexogy'          => 'Inexogy / Discovergy (Cloud)',
         'bluelog_scada_inverter' => "Meteocontrol blue'Log SCADA – Wechselrichter",
         'bluelog_scada_meter'    => "Meteocontrol blue'Log SCADA – Zähler",
+        'bluelog_rpc'            => "Meteocontrol blue'Log RPC (Direktvermarkter, ⚠️ schreibend)",
+        'bluelog_powercontrol'   => "Meteocontrol blue'Log Power Control (Netzbetreiber, ⚠️ schreibend)",
     ];
 
     // Funktions-Vokabular für die Zuordnung „welcher Verbraucher hängt hier?".
@@ -2446,6 +2668,19 @@ class MeterHub extends IPSModule
         $this->RegisterPropertyInteger('Port', 502);
         $this->RegisterPropertyInteger('UnitId', 1);
 
+        // Sollwert-Schreibzugriff (blue'Log RPC/Power Control, Dietmars
+        // Auftrag 07.09.2026 — Ersatz für die bisher in PHP-Skripten
+        // vergrabene "Regelung der blue'Log Master"). Nur bei den beiden
+        // WRITABLE_METERS sichtbar/wirksam, aber unbedingt registriert (siehe
+        // Begründung beim Meter-Auswahlfeld selbst weiter unten).
+        $this->RegisterPropertyString('SetpointMode', 'rel'); // 'rel' (%) oder 'abs' (W)
+        $this->RegisterPropertyFloat('TargetSetpoint', 100.0);
+        $this->RegisterPropertyString('FailsafeMode', 'hold'); // 'hold' oder 'default'
+        $this->RegisterPropertyFloat('FailsafeDefaultPercent', 100.0);
+        // Nur RPC: Gültigkeitszeit in Minuten (Register 5006). Power Control
+        // hat laut Herstellerdoku keinen vergleichbaren Mechanismus.
+        $this->RegisterPropertyInteger('RpcValidTimeMin', 10);
+
         // Inexogy-Cloud-Zugang. E-Mail/Passwort dienen nur dem einmaligen
         // OAuth-Handshake; das Passwort wird danach geleert. Die Tokens liegen
         // in Attributen (nicht im Formular sichtbar, nie im Klartext-Anzeige).
@@ -2526,7 +2761,7 @@ class MeterHub extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.24.35';
+    private const NEWS_VERSION = '0.24.37';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -2565,8 +2800,10 @@ class MeterHub extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
-                ['type' => 'Label', 'caption' => '• 🆕 Zwei neue Zählertypen: „Meteocontrol blue\'Log SCADA – Wechselrichter/Zähler". Ein blue\'Log-Solarpark-Datenlogger kann jedes angeschlossene Gerät unter einer eigenen „SCADA-Adresse" anbieten (steht am blue\'Log selbst: Geräteliste → Spalte „SCADA Adresse") — diese Adresse ist die Unit-ID der Instanz, NICHT 1.'],
-                ['type' => 'Label', 'caption' => '• Der Wechselrichter-Treiber ist live an einer echten Solarpark-Anlage gegen die dortige, unabhängig konfigurierte Symcon-Verdrahtung verifiziert (Registeradressen, Byte-Reihenfolge, Momentanwert) — der Zähler-Block folgt derselben Registerkarte, aber ohne eigenes Prüfobjekt vor Ort.'],
+                ['type' => 'Label', 'caption' => '• ⚠️🆕 Zwei neue, SCHREIBENDE Zählertypen: „Meteocontrol blue\'Log RPC" (Direktvermarkter) und „… Power Control" (Netzbetreiber). MeterHub kann jetzt einen Sollwert kontinuierlich auf einem blue\'Log-Kontrollkanal halten (relativ % oder absolut W, umschaltbar) — das erste Mal, dass dieses Modul nicht nur liest, sondern auch schreibt. Vor dem Aktivieren unbedingt sicherstellen, dass kein zweites System denselben Kanal bedient.'],
+                ['type' => 'Label', 'caption' => '• Ausfallverhalten beim Deaktivieren wählbar: „Default-Sollwert schreiben" (sofort zurück in den Normalbetrieb) oder „letzten Sollwert halten" (blue\'Log-eigene Gültigkeitszeit läuft von selbst ab). Neue Funktion `MHUB_SetBlueLogTarget($id, $wert)` für Skripte/EMS.'],
+                ['type' => 'Label', 'caption' => '• 🆕 Zwei neue, rein lesende Zählertypen: „Meteocontrol blue\'Log SCADA – Wechselrichter/Zähler". Ein blue\'Log-Solarpark-Datenlogger kann jedes angeschlossene Gerät unter einer eigenen „SCADA-Adresse" anbieten (steht am blue\'Log selbst: Geräteliste → Spalte „SCADA Adresse") — diese Adresse ist die Unit-ID der Instanz, NICHT 1.'],
+                ['type' => 'Label', 'caption' => '• Der Wechselrichter-Lesetreiber ist live an einer echten Solarpark-Anlage gegen die dortige, unabhängig konfigurierte Symcon-Verdrahtung verifiziert (Registeradressen, Byte-Reihenfolge, Momentanwert).'],
                 ['type' => 'Label', 'caption' => '• Damit lässt sich eine „Kette" aus vielen einzelnen, per SCADA-Adresse adressierten Geräten hinter einem blue\'Log über mehrere MeterHub-Instanzen abbilden und in MeterHubVirtual zu einer Feld-/NAP-Summe verketten.'],
                 ['type' => 'Button', 'caption' => 'Verstanden – nicht mehr anzeigen', 'onClick' => 'MHUB_AckNews($id);'],
             ],
@@ -2670,6 +2907,16 @@ class MeterHub extends IPSModule
             ? ($this->ReadAttributeString('InexogyToken') !== '' && $this->ReadPropertyString('InexogyMeterID') !== '')
             : ($this->ReadPropertyString('Host') !== '');
         if (!$this->ReadPropertyBoolean('Active') || !$ready) {
+            // Ausfallverhalten "Default-Sollwert": beim Deaktivieren (nicht
+            // beim erstmaligen Anlegen ohne Host — dort gibt es nichts zu
+            // schreiben) einmalig aktiv auf den Rückfallwert schreiben, statt
+            // bis zu 10 Minuten auf das blue'Log-eigene Ablaufen der
+            // Gültigkeitszeit zu warten. "Letzten Sollwert halten" tut hier
+            // bewusst nichts weiter.
+            $driver = $this->GetDriver();
+            if ($ready && $driver instanceof MHUB_WritableMeterDriverInterface && $this->FailsafeMode() === 'default') {
+                $driver->writeFailsafe($this->GetTransport(), $this);
+            }
             $this->SetStatus(104);
             $this->SetTimerInterval('FastTimer', 0);
             $this->SetTimerInterval('SlowTimer', 0);
@@ -2686,7 +2933,17 @@ class MeterHub extends IPSModule
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-        $ok = $this->GetDriver()->readFast($this->GetTransport(), $this);
+        $driver = $this->GetDriver();
+        $mb     = $this->GetTransport();
+        $ok     = $driver->readFast($mb, $this);
+        // Schreibzyklus direkt im Anschluss an den Lesezyklus — kein
+        // eigener Timer nötig. Läuft bei JEDEM Takt, auch ohne geänderten
+        // Zielwert (siehe Klassenkommentar MHUB_BlueLogRpcDriver: das
+        // Nachschreiben IST das Sicherheitsnetz gegen das Ablaufen der
+        // Gültigkeitszeit am blue'Log).
+        if ($driver instanceof MHUB_WritableMeterDriverInterface) {
+            $driver->writeSetpoint($mb, $this);
+        }
         $this->SetStatus($ok ? 102 : 201);
         $this->UpdateMirrors();
     }
@@ -2719,6 +2976,32 @@ class MeterHub extends IPSModule
         return $ok
             ? '✅ Verbindung erfolgreich, Werte aktualisiert (' . date('H:i:s') . ' Uhr).'
             : '❌ Verbindung fehlgeschlagen — Host/Port/Unit-ID/Zählertyp prüfen.';
+    }
+
+    /**
+     * Öffentliche Schnittstelle für Skripte/EMS — setzt den Zielwert und
+     * schreibt ihn sofort, statt auf den nächsten FastTimer-Takt zu warten.
+     * `IPS_SetProperty` + `IPS_ApplyChanges` auf die eigene Instanz ist ein
+     * an dieser Stelle bereits verwendetes, sicheres Muster (siehe
+     * InexogyLogin() — Passwort-Löschung nach Handshake).
+     *
+     * MeterHub berechnet den Wert NICHT selbst (z. B. keine kapazitäts-
+     * gewichtete Aggregation mehrerer Quellwerte) — das bleibt bewusst
+     * außerhalb, siehe Klassenkommentar MHUB_BlueLogRpcDriver.
+     */
+    public function SetBlueLogTarget(float $value): string
+    {
+        $driver = $this->GetDriver();
+        if (!($driver instanceof MHUB_WritableMeterDriverInterface)) {
+            return '❌ Dieser Zählertyp unterstützt keinen Sollwert-Schreibzugriff.';
+        }
+        IPS_SetProperty($this->InstanceID, 'TargetSetpoint', $value);
+        IPS_ApplyChanges($this->InstanceID);
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return '⚠️ Zielwert gespeichert, Instanz ist aber inaktiv — es wird nicht geschrieben.';
+        }
+        $driver->writeSetpoint($this->GetTransport(), $this);
+        return '✅ Zielwert ' . $value . ' (' . ($this->SetpointMode() === 'abs' ? 'W' : '%') . ') gesetzt und sofort geschrieben.';
     }
 
     // -----------------------------------------------------------------------
@@ -3138,6 +3421,44 @@ class MeterHub extends IPSModule
                 ],
                 [
                     'type'     => 'ExpansionPanel',
+                    'caption'  => "⚡  Sollwert-Schreibzugriff (blue'Log RPC/Power Control)",
+                    'expanded' => true,
+                    'items'    => [
+                        [
+                            'type' => 'Label', 'name' => 'WriteWarningPanel',
+                            'caption' => '⚠️ Diese Instanz SCHREIBT einen Sollwert auf ein reales Kontrollinterface. Kollidiert mit jedem anderen System, das denselben Kanal bereits bedient — vor dem Aktivieren sicherstellen, dass kein zweiter Schreiber (Skript, EMS, Fremdsystem) auf dieselbe Slave-ID desselben blue\'Log zugreift.',
+                            'visible' => false,
+                        ],
+                        [
+                            'type' => 'Label', 'name' => 'WriteWarningGridop',
+                            'caption' => '⚠️ Power-Control-Rolle: Diese Instanz gibt sich gegenüber dem blue\'Log als NETZBETREIBER aus. Nur aktivieren, wenn diese Rolle tatsächlich zutrifft. Kein Watchdog/Gültigkeitszeit-Mechanismus — ein gesetzter Wert bleibt stehen, bis er aktiv überschrieben wird.',
+                            'visible' => false,
+                        ],
+                        [
+                            'type' => 'Select', 'name' => 'SetpointMode', 'caption' => 'Sollwert-Modus',
+                            'options' => [
+                                ['caption' => 'Relativ (% der Anschlussleistung)', 'value' => 'rel'],
+                                ['caption' => 'Absolut (Watt)',                    'value' => 'abs'],
+                            ],
+                            'onChange' => 'MHUB_OnChangeSetpointMode($id, $SetpointMode);',
+                            'visible' => false,
+                        ],
+                        ['type' => 'NumberSpinner', 'name' => 'TargetSetpoint', 'caption' => 'Zielwert (%, relativ)', 'digits' => 3, 'visible' => false],
+                        [
+                            'type' => 'Select', 'name' => 'FailsafeMode', 'caption' => 'Ausfallverhalten (bei Deaktivieren)',
+                            'options' => [
+                                ['caption' => 'Default-Sollwert schreiben', 'value' => 'default'],
+                                ['caption' => 'Letzten Sollwert halten',    'value' => 'hold'],
+                            ],
+                            'visible' => false,
+                        ],
+                        ['type' => 'NumberSpinner', 'name' => 'FailsafeDefaultPercent', 'caption' => 'Default-Sollwert (%, immer relativ)', 'digits' => 1, 'minimum' => 0, 'maximum' => 125, 'visible' => false],
+                        ['type' => 'NumberSpinner', 'name' => 'RpcValidTimeMin', 'caption' => 'Gültigkeitszeit (Minuten, nur RPC)', 'minimum' => 1, 'maximum' => 255, 'visible' => false],
+                        ['type' => 'Button', 'name' => 'BtnWriteNow', 'caption' => '▶  Zielwert jetzt schreiben', 'onClick' => 'echo MHUB_SetBlueLogTarget($id, $TargetSetpoint);', 'visible' => false],
+                    ],
+                ],
+                [
+                    'type'     => 'ExpansionPanel',
                     'caption'  => '🏷️  Funktionszuordnung',
                     'expanded' => false,
                     'items'    => $funcItems,
@@ -3260,6 +3581,25 @@ class MeterHub extends IPSModule
         $this->UpdateFormField('Host', 'validate', $isCloud ? '' : '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$');
         $this->UpdateFormField('Port', 'visible', !$isCloud);
         $this->UpdateFormField('UnitId', 'visible', !$isCloud);
+
+        // Sollwert-Panel (blue'Log RPC/Power Control) — nur bei den beiden
+        // schreibenden Zählertypen sichtbar.
+        $isWritable = in_array($meter, self::WRITABLE_METERS, true);
+        $this->UpdateFormField('WriteWarningPanel', 'visible', $isWritable);
+        $this->UpdateFormField('WriteWarningGridop', 'visible', $meter === 'bluelog_powercontrol');
+        foreach (['SetpointMode', 'TargetSetpoint', 'FailsafeMode', 'FailsafeDefaultPercent', 'BtnWriteNow'] as $f) {
+            $this->UpdateFormField($f, 'visible', $isWritable);
+        }
+        $this->UpdateFormField('RpcValidTimeMin', 'visible', in_array($meter, self::RPC_VALID_TIME_METERS, true));
+        $this->OnChangeSetpointMode($this->ReadPropertyString('SetpointMode'));
+    }
+
+    /** Feldbeschriftung/Einheit des Zielwert-Felds passend zum Sollwert-Modus. */
+    public function OnChangeSetpointMode(string $mode)
+    {
+        $isAbs = $mode === 'abs';
+        $this->UpdateFormField('TargetSetpoint', 'caption', $isAbs ? 'Zielwert (W, absolut)' : 'Zielwert (%, relativ)');
+        $this->UpdateFormField('TargetSetpoint', 'suffix', $isAbs ? 'W' : '%');
     }
 
     // -----------------------------------------------------------------------
@@ -3311,6 +3651,15 @@ class MeterHub extends IPSModule
     {
         return $this->ReadPropertyString('InexogyMeterID');
     }
+
+    // Für die schreibenden blue'Log-Treiber (MHUB_WritableMeterDriverInterface)
+    // — öffentliche Wrapper nach demselben Muster wie InexogyMeterId() oben,
+    // da Treiberklassen nur auf PUBLIC Methoden von $hub zugreifen können.
+    public function SetpointMode(): string        { return $this->ReadPropertyString('SetpointMode'); }
+    public function TargetSetpoint(): float       { return $this->ReadPropertyFloat('TargetSetpoint'); }
+    public function FailsafeMode(): string         { return $this->ReadPropertyString('FailsafeMode'); }
+    public function FailsafeDefaultPercent(): float{ return $this->ReadPropertyFloat('FailsafeDefaultPercent'); }
+    public function RpcValidTimeMin(): int         { return $this->ReadPropertyInteger('RpcValidTimeMin'); }
 
     /**
      * Führt den OAuth-Handshake mit E-Mail+Passwort aus, speichert danach NUR
@@ -3838,6 +4187,15 @@ class MeterHub extends IPSModule
     // Transport (MHUB_InexogyClient statt MHUB_ModbusTcpClient). Modbus-Zähler sind alle
     // 'realtime'.
     private const CLOUD_METERS = ['inexogy'];
+    // Zählertypen mit Sollwert-Schreibzugriff (blue'Log RPC/Power Control) —
+    // steuert Formular-Sichtbarkeit des Sollwert-Panels (GetConfigurationForm()/
+    // OnChangeMeter()). Ob der TREIBER tatsächlich schreibt, prüft der Code
+    // separat per `instanceof MHUB_WritableMeterDriverInterface` — diese Liste
+    // ist nur für die UI-Sichtbarkeit vor dem ersten "Übernehmen" nötig.
+    private const WRITABLE_METERS = ['bluelog_rpc', 'bluelog_powercontrol'];
+    // Nur bei diesem einen Zählertyp existiert das Gültigkeitszeit-/Watchdog-
+    // Register (5006/5008) laut Herstellerdoku — Power Control hat keins.
+    private const RPC_VALID_TIME_METERS = ['bluelog_rpc'];
 
     /**
      * Öffentliche Abfrage der Zuordnung für andere Module (EMS, Kacheln):

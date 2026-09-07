@@ -1,7 +1,7 @@
 # MeterHub
 
 ![Symcon](https://img.shields.io/badge/Symcon-PHPModul-blue)
-![Modul Version](https://img.shields.io/badge/Modul_Version-0.24.36--beta.1-blue)
+![Modul Version](https://img.shields.io/badge/Modul_Version-0.24.37--beta.1-blue)
 ![Symcon Version](https://img.shields.io/badge/Symcon_Version-9.0%2B-blue)
 ![License](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-lightgrey)
 [![Check Style](https://github.com/DG65/NRGMeterHub/actions/workflows/check-style.yml/badge.svg)](https://github.com/DG65/NRGMeterHub/actions/workflows/check-style.yml)
@@ -39,6 +39,14 @@ Ein herzliches Dankeschön an **Sepp Lausch** ([seppm im Symcon-Forum](https://c
 | **Inexogy / Discovergy** (Cloud) | Bezug/Einspeisung (kumulativ, kWh), Gesamtleistung, optional Leistung und Spannung je Phase | **Kein Modbus** — Cloud-API (`api.inexogy.com`) über **OAuth 1.0a**. E-Mail/Passwort einmal beim Einrichten, danach nur Zugriffs-Token (kein Klartext-Passwort). Für das abrechnungsverbindliche iMSys am Netzübergabepunkt; als solches kennzeichnen (Checkbox oben). Skalierung aus dem Alt-Modul verifiziert und gegen echte Zählerwerte geprüft; der OAuth-Handshake ist am eigenen Konto zu bestätigen. |
 | **Meteocontrol blue'Log SCADA – Wechselrichter** | Wirkleistung AC, Ertrag gesamt (kumulativ), Netzfrequenz, Gerätetyp-Rückmeldung, optional U/I je Phase (AC) und Gleichstromseite (P/U/I) | **FC 0x03**, Float32 **wortgetauscht (CDAB)**, Registerblock ab 41000. Liest **ein** Gerät hinter einem blue'Log-Solarpark-Datenlogger über dessen **SCADA-Adresse** (= `UnitId` dieser Instanz — steht am blue'Log selbst: Geräteliste → Spalte „SCADA Adresse", NICHT 1). Byte-Reihenfolge und Momentanwert live an einer echten Solarpark-Anlage gegen unabhängig konfigurierte Verdrahtung verifiziert. |
 | **Meteocontrol blue'Log SCADA – Zähler** | Wirkleistung gesamt, Bezug/Abgabe (kumulativ), Netzfrequenz, Gerätetyp-Rückmeldung, optional U/I je Phase, Blind-/Scheinleistung, Leistungsfaktor | **FC 0x03**, Float32 wortgetauscht (CDAB), Registerblock ab 43000 — gleiches Adressprinzip wie oben. Byte-Reihenfolge/Adress-Mechanismus verifiziert, die konkreten Registeradressen dieses Blocks hatten an der Test-Anlage aber kein eigenes Prüfobjekt (kein einzeln adressierter SCADA-Zähler vorhanden) — vor produktivem Einsatz gegen die Geräteanzeige abgleichen. |
+| **Meteocontrol blue'Log RPC** ⚠️ schreibend | Einspeiseleistung (Ist), wirksamer Sollwert (Ist, %), Netzfrequenz — UND schreibt kontinuierlich einen Sollwert (relativ % oder absolut W) auf Slave-ID 10 | **FC 0x03 lesend / FC 0x10 (Preset Multiple Registers) schreibend**, Float32 wortgetauscht (CDAB). Direktvermarkter-/„3rd party"-Rolle laut Hersteller — dafür ist die Schnittstelle gedacht. Watchdog/Gültigkeitszeit (Register 5006) wird bei jedem Zyklus mitgeschrieben. **Vor der ersten Aktivierung sicherstellen, dass kein anderes System denselben Kanal bedient** — siehe Warnhinweis im Formular. |
+| **Meteocontrol blue'Log Power Control** ⚠️ schreibend | Wirkleistung (Ist, Netzübergabepunkt), Netzfrequenz — UND schreibt kontinuierlich einen Sollwert auf Slave-ID 1 | **FC 0x03 lesend / FC 0x10 schreibend**, Float32 wortgetauscht (CDAB). Diese Rolle gehört eigentlich dem **Netzbetreiber** — nur aktivieren, wenn das tatsächlich zutrifft. **Kein Watchdog/Gültigkeitszeit-Mechanismus** laut Herstellerdoku (anders als RPC): ein gesetzter Wert bleibt stehen, bis er aktiv überschrieben wird. |
+
+Bei beiden Sollwert-Zählertypen lässt sich der Modus (relativ %/absolut W) umschalten, ein
+Ausfallverhalten beim Deaktivieren wählen (Default-Sollwert vs. letzten Sollwert halten) und
+`MHUB_SetBlueLogTarget($id, $wert)` von Skripten/EMS aus aufrufen. MeterHub berechnet den
+Sollwert nicht selbst — eine etwaige Aggregationslogik (z. B. mehrere Direktvermarkter-
+Quellwerte) bleibt außerhalb.
 
 > ⚠️ **go-e Controller und Überschussladen — Zwei-Regler-Warnung:** Der Controller ist nicht
 > nur Messzentrale. Je nach Konfiguration regelt er die go-e-Wallboxen **selbst**

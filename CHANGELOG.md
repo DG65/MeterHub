@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.24.37-beta.1 (2026-09-07)
+
+- **Erster Schreibzugriff in MeterHub: blue'Log RPC/Power Control.** Universeller Treiber,
+  Teil 3 — nach Rücksprache mit ModbusSlave und EMS. Zwei neue Zählertypen,
+  `MHUB_BlueLogRpcDriver` (Slave-ID 10, Direktvermarkter-Rolle) und
+  `MHUB_BlueLogPowerControlDriver` (Slave-ID 1, Netzbetreiber-Rolle — mit deutlicher
+  Formular-Warnung, da eine Instanz damit diese Rolle gegenüber dem blue'Log übernimmt).
+  Bisher war MeterHub rein lesend (siehe Modulkopf); neues optionales
+  `MHUB_WritableMeterDriverInterface` markiert nur diese zwei Treiber als schreibend, ohne
+  die 17 bestehenden, rein lesenden Treiber anzufassen. Neue, erstmalige Schreibfähigkeit in
+  `MHUB_ModbusTcpClient` (FC 0x10, `writeHolding()`/`packFloat32()` als Gegenstück zu
+  `readFloat32()`).
+  - **Sollwert-Modus umschaltbar** (Select „Relativ %"/„Absolut W", Dietmars ausdrücklicher
+    Wunsch: „je nach Anwendungsfall muss man zwischen ABS und REL umschalten können") —
+    schreibt je nach Modus auf REL (5000) oder ABS (5002 bei RPC, 5006 bei Power Control).
+  - **MeterHub hält den Zielwert selbst** (Property „Zielwert", bei jedem Lesezyklus erneut
+    geschrieben) statt nur eine aufrufbare Funktion anzubieten — bei RPC ist das zugleich das
+    Sicherheitsnetz gegen das Ablaufen der Gültigkeitszeit (Register 5006, konfigurierbar).
+    Power Control hat laut Herstellerdoku **keinen** vergleichbaren Watchdog-Mechanismus —
+    ein gesetzter Wert bleibt stehen, bis er aktiv überschrieben wird (im Formular als eigene
+    Warnung gekennzeichnet).
+  - **Ausfallverhalten wählbar**: „Default-Sollwert schreiben" (einmalig aktiv beim
+    Deaktivieren, immer relativ — 100 % ist ein eindeutiges „Normalbetrieb"-Signal, unabhängig
+    vom sonst gewählten Modus) oder „letzten Sollwert halten" (kein aktives Eingreifen).
+  - Neue öffentliche Funktion `MHUB_SetBlueLogTarget($id, $wert)` für Skripte/EMS — setzt den
+    Zielwert und schreibt ihn sofort, statt auf den nächsten Zyklus zu warten. MeterHub
+    berechnet den Wert bewusst nicht selbst (z. B. keine kapazitätsgewichtete Aggregation
+    mehrerer Direktvermarkter-Quellwerte) — das bleibt außerhalb.
+  - **Hintergrund/Zweck** (Dietmar, 07.09.2026): Ersatz für eine an seinem Solarpark bereits
+    produktiv laufende, aber nur schwer nachvollziehbare Ad-hoc-PHP-Skript-Lösung
+    („Regelung der blue'Log Master", zwei Instanzen je NAP + ein Quotierungs-Timer) — geplant
+    als Parallelbetrieb-Test, danach vollständige Ablösung der Skripte. Zusätzlich als
+    generischer NRG-Stack-Baustein gedacht (auch für andere Nutzer mit ähnlichem Bedarf).
+  - **Sicherheitsklärung mit ModbusSlave (Cross-Session, 07.09.2026):** Vor jeder ersten
+    Aktivierung an einer echten Anlage sicherstellen, dass kein zweites System (Skript, EMS,
+    Fremdgerät) bereits denselben Kanal bedient — zwei Schreiber auf demselben RPC-/
+    Power-Control-Kanal sind nicht vorgesehen und wurden von Dietmar ausdrücklich
+    ausgeschlossen. Formular trägt entsprechend deutliche Warnhinweise.
+  - **Nur lokal (`packFloat32`/Interface-Zuordnung) verifiziert, NICHT live gegen den echten
+    Schreibkanal getestet** — das bleibt bewusst aus, bis die bestehenden Ad-hoc-Skripte am
+    Solarpark koordiniert deaktiviert sind (Kollisionsschutz).
+
 ## 0.24.36-beta.1 (2026-09-07)
 
 - **Neuer Suchmodus in MeterHubDiscovery: „blue'Log SCADA-Adressbereich".** Dietmars Auftrag
