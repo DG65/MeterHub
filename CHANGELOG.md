@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.24.35-beta.1 (2026-09-07)
+
+- **Zwei neue Zählertypen: Meteocontrol blue'Log SCADA (Wechselrichter/Zähler).** Dietmars
+  Auftrag „universeller Treiber für die blue'Logs" — Teil 1 (lesend). Ein blue'Log
+  (Solarpark-Datenlogger) kann laut Meteocontrols SCADA-Interface-Lizenz (557.009) jedes
+  angeschlossene Gerät unter einer eigenen, am blue'Log selbst frei vergebenen „SCADA-Adresse"
+  im selben Registerschema anbieten (Adresse 97 = das blue'Log selbst/Summenwerte; jedes
+  angeschlossene Gerät bekommt eine eigene Adresse, an Dietmars Anlage ab 100 aufwärts) —
+  `MHUB_BlueLogScadaInverterDriver` (Registerblock 41000) und `MHUB_BlueLogScadaMeterDriver`
+  (Registerblock 43000) lesen genau EIN Gerät über dessen SCADA-Adresse (= `UnitId` der
+  Instanz), FC 0x03, Float32 wortgetauscht (CDAB). Byte-Reihenfolge und Registeradressen NICHT
+  aus der Herstellerdoku angenommen, sondern live an Dietmars Solarpark gegengeprüft:
+  `ByteOrder 3` aus Symcons eigener Modbus-Konfiguration abgelesen, und der Wechselrichter-
+  Treiber lieferte exakt denselben Momentanwert wie die dort unabhängig konfigurierte
+  Alt-Verdrahtung (48 Wechselrichter-Instanzen „WR ⟨Feld⟩.1.⟨Kombiner⟩.⟨WR⟩"). Der
+  Zähler-Registerblock (43000) folgt derselben, am selben Tag gelesenen Registerkarte,
+  hatte an dieser Anlage aber kein eigenes Prüfobjekt (kein per SCADA-Adresse einzeln
+  angesprochener Zähler vorhanden) — vor dem ersten produktiven Einsatz gegen die
+  Geräteanzeige abgleichen. Neues geteiltes Enum-Profil `MHB.BlueLogDeviceType`
+  (Register 40000, Gerätetyp-Rückmeldung 0–9) als Diagnose-Variable in beiden Treibern.
+  Viele solcher Basisinstanzen (eine je Gerät/SCADA-Adresse) lassen sich anschließend über
+  MeterHubVirtual zu einer Feld-/NAP-Summe verketten — die eigentliche „Kette", die Dietmar
+  für seinen Solarpark gebraucht hat.
+
 ## 0.24.34-beta.1 (2026-09-03)
 
 - **Schaltgruppe (MeterHubVirtual, `MHUBV_GetFunctions` 1.4).** Dietmars Entscheidung, über

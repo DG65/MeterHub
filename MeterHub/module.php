@@ -2047,6 +2047,254 @@ class MHUB_InexogyDriver implements MHUB_MeterDriverInterface
 }
 
 // ---------------------------------------------------------------------------
+// MHUB_BlueLogScadaInverterDriver — Meteocontrol blue'Log, SCADA-Schnittstelle
+// (Lizenz 557.009), Wechselrichter-Registerblock.
+//
+// Ein blue'Log (Solarpark-Datenlogger) kann JEDES angeschlossene Gerät unter
+// einer eigenen „SCADA-Adresse" im selben, herstellerweiten Registerschema
+// anbieten — die Adresse selbst wird AUF DEM blue'Log konfiguriert
+// (Geräteliste → Spalte „SCADA Adresse", Schaltflächen „SCADA Adressen
+// ändern/zurücksetzen"), nicht in MeterHub. Adresse 97 ist reserviert für
+// das blue'Log selbst (allgemeine Werte/Summen); jedes angeschlossene Gerät
+// bekommt eine eigene, frei vergebene Adresse (an Dietmars Solarpark ab 100
+// aufwärts) — diese Adresse ist die `UnitId` dieser Instanz.
+//
+// Live an Dietmars Solarpark verifiziert (07.09.2026, 48 Wechselrichter-
+// Instanzen „WR <Feld>.1.<Kombiner>.<WR>", SCADA-Adressen 100–198): FC 0x03,
+// Register 41000 (P_AC), Float32 wortgetauscht (CDAB) — `ByteOrder 3` direkt
+// aus Symcons eigener ModBus-Address-Konfiguration an derselben Anlage
+// abgelesen (Registerkarten: erst messen, dann glauben), nicht aus der
+// Herstellerdoku angenommen. Registeradressen laut Meteocontrol „SCADA
+// Interface Register V2.27.0" (557009-SCADA-interface).
+// ---------------------------------------------------------------------------
+
+class MHUB_BlueLogScadaInverterDriver implements MHUB_MeterDriverInterface
+{
+    /** Register 40000, Gerätetyp-Meldung — von beiden SCADA-Treibern geteilt. */
+    public const DEVICE_TYPE_ENUM = [
+        0 => ["Datenlogger (blue'Log)", 0x808080],
+        1 => ['Wechselrichter',         0x00A000],
+        2 => ['Sensor',                 0x0080C0],
+        3 => ['Zähler',                 0x0080C0],
+        4 => ['String',                 0x808000],
+        5 => ['Tracker',                0x808000],
+        6 => ['Status DI extern',       0x808080],
+        7 => ['Genset',                 0xC08000],
+        8 => ['Batterie',               0x8000C0],
+        9 => ['Kraftwerksregler',       0x808080],
+    ];
+
+    public function getBaseVars()
+    {
+        return [
+            ['power_total',   'Wirkleistung AC',           'F', 'NRG.Watt',   true,  'total',  'FC3 41000 (P_AC)'],
+            ['energy_export', 'Ertrag gesamt',             'F', 'NRG.kWh', true,  'energy', 'FC3 41066 (E_TOTAL, Wh)'],
+            ['frequency',     'Netzfrequenz',              'F', 'MHB.Hz',  false, 'total',  'FC3 41012 (F_AC)'],
+            ['device_type',   'Gerätetyp (SCADA-Meldung)', 'I', 'MHB.BlueLogDeviceType', false, 'total', 'FC3 40000'],
+            ['connected',     'Verbindung',                'B', '~Alert.Reversed', false, 'errors', ''],
+        ];
+    }
+
+    public function getOptionalGroups()
+    {
+        return [
+            'GroupVoltagePhase' => ['caption' => 'Spannung je Phase (AC)', 'vars' => [
+                ['u_l1_n', 'Spannung L1', 'F', 'NRG.Volt', false, 'voltage', 'FC3 41040 (U_AC1)'],
+                ['u_l2_n', 'Spannung L2', 'F', 'NRG.Volt', false, 'voltage', 'FC3 41042 (U_AC2)'],
+                ['u_l3_n', 'Spannung L3', 'F', 'NRG.Volt', false, 'voltage', 'FC3 41044 (U_AC3)'],
+            ]],
+            'GroupCurrentPhase' => ['caption' => 'Strom je Phase (AC)', 'vars' => [
+                ['i_l1', 'Strom L1', 'F', 'NRG.Ampere', false, 'current', 'FC3 41052 (I_AC1)'],
+                ['i_l2', 'Strom L2', 'F', 'NRG.Ampere', false, 'current', 'FC3 41054 (I_AC2)'],
+                ['i_l3', 'Strom L3', 'F', 'NRG.Ampere', false, 'current', 'FC3 41056 (I_AC3)'],
+            ]],
+            'GroupDc' => ['caption' => 'Gleichstromseite (Summe aller Strings)', 'vars' => [
+                ['p_dc', 'Leistung DC', 'F', 'NRG.Watt',   false, 'dc', 'FC3 41080 (P_DC)'],
+                ['u_dc', 'Spannung DC', 'F', 'NRG.Volt',   false, 'dc', 'FC3 41082 (U_DC)'],
+                ['i_dc', 'Strom DC',    'F', 'NRG.Ampere', false, 'dc', 'FC3 41084 (I_DC)'],
+            ]],
+        ];
+    }
+
+    public function getProfiles() { return []; }
+
+    public function getEnumProfiles()
+    {
+        return ['MHB.BlueLogDeviceType' => self::DEVICE_TYPE_ENUM];
+    }
+
+    public function readFast($mb, $hub)
+    {
+        // blue'Log SCADA liefert Float32 immer wortgetauscht (CDAB) — fest für
+        // dieses Interface, unabhängig vom nutzerseitigen WordSwap-Schalter.
+        $mb->setWordSwap(true);
+
+        $r = $mb->readHolding(41000, 14); // 41000..41013 (P_AC .. F_AC)
+        if ($r === null) {
+            $hub->SetVarBool('connected', false);
+            return false;
+        }
+        $hub->SetVarBool('connected', true);
+        $hub->SetVarFloat('power_total', $mb->readFloat32($r, 0));  // 41000
+        $hub->SetVarFloat('frequency',   $mb->readFloat32($r, 12)); // 41012
+
+        $t = $mb->readHolding(40000, 1);
+        if ($t !== null) {
+            $hub->SetVarInt('device_type', $mb->u16($t, 0));
+        }
+
+        if ($hub->GroupActive('GroupVoltagePhase') || $hub->GroupActive('GroupCurrentPhase')) {
+            $p = $mb->readHolding(41040, 18); // 41040..41057
+            if ($p !== null) {
+                if ($hub->GroupActive('GroupVoltagePhase')) {
+                    $hub->SetVarFloat('u_l1_n', $mb->readFloat32($p, 0));  // 41040
+                    $hub->SetVarFloat('u_l2_n', $mb->readFloat32($p, 2));  // 41042
+                    $hub->SetVarFloat('u_l3_n', $mb->readFloat32($p, 4));  // 41044
+                }
+                if ($hub->GroupActive('GroupCurrentPhase')) {
+                    $hub->SetVarFloat('i_l1', $mb->readFloat32($p, 12)); // 41052
+                    $hub->SetVarFloat('i_l2', $mb->readFloat32($p, 14)); // 41054
+                    $hub->SetVarFloat('i_l3', $mb->readFloat32($p, 16)); // 41056
+                }
+            }
+        }
+        if ($hub->GroupActive('GroupDc')) {
+            $d = $mb->readHolding(41080, 6); // 41080..41085
+            if ($d !== null) {
+                $hub->SetVarFloat('p_dc', $mb->readFloat32($d, 0)); // 41080
+                $hub->SetVarFloat('u_dc', $mb->readFloat32($d, 2)); // 41082
+                $hub->SetVarFloat('i_dc', $mb->readFloat32($d, 4)); // 41084
+            }
+        }
+        return true;
+    }
+
+    // Energie: E_TOTAL (41066, kumulativer Ertrag in Wh). E_DAY (41064) wird
+    // bewusst NICHT verwendet — springt täglich auf 0 zurück, taugt laut
+    // Verbund-Konvention nicht für einen kumulativen Zähler.
+    public function readSlow($mb, $hub)
+    {
+        $mb->setWordSwap(true);
+        $r = $mb->readHolding(41066, 2);
+        if ($r === null) {
+            return;
+        }
+        $hub->SetVarEnergyWh('energy_export', $mb->readFloat32($r, 0)); // 41066
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MHUB_BlueLogScadaMeterDriver — Meteocontrol blue'Log, SCADA-Schnittstelle,
+// Zähler-Registerblock (43000) statt „Inverter" (41000) — sonst dasselbe
+// Interface, dieselbe geteilte Geräteliste am blue'Log (siehe
+// MHUB_BlueLogScadaInverterDriver für die volle Herleitung der SCADA-Adresse).
+//
+// Byte-Reihenfolge (CDAB) und der allgemeine Adress-/FC3-Mechanismus sind
+// live an Dietmars Solarpark verifiziert (siehe Inverter-Treiber) — die
+// konkreten 43000er-Registeradressen selbst laufen dort aber über keinen
+// physisch angeschlossenen SCADA-Zähler (Gerätetyp 3); es existierte an
+// dieser Anlage kein Prüfobjekt dafür. Sie stammen unverändert aus derselben
+// Meteocontrol-Quelle „SCADA Interface Register V2.27.0" wie der verifizierte
+// Inverter-Block — vor dem ersten produktiven Einsatz an einem echten Zähler
+// gegen die Geräteanzeige abgleichen.
+// ---------------------------------------------------------------------------
+
+class MHUB_BlueLogScadaMeterDriver implements MHUB_MeterDriverInterface
+{
+    public function getBaseVars()
+    {
+        return [
+            ['power_total',   'Wirkleistung gesamt',       'F', 'NRG.Watt',   true,  'total',  'FC3 43000 (M_AC_P)'],
+            ['energy_import', 'Wirkarbeit Bezug',          'F', 'NRG.kWh', true,  'energy', 'FC3 43066 (M_AC_E_IMP, Wh)'],
+            ['energy_export', 'Wirkarbeit Abgabe',         'F', 'NRG.kWh', true,  'energy', 'FC3 43064 (M_AC_E_EXP, Wh)'],
+            ['frequency',     'Netzfrequenz',              'F', 'MHB.Hz',  false, 'total',  'FC3 43014 (M_AC_F)'],
+            ['device_type',   'Gerätetyp (SCADA-Meldung)', 'I', 'MHB.BlueLogDeviceType', false, 'total', 'FC3 40000'],
+            ['connected',     'Verbindung',                'B', '~Alert.Reversed', false, 'errors', ''],
+        ];
+    }
+
+    public function getOptionalGroups()
+    {
+        return [
+            'GroupVoltagePhase' => ['caption' => 'Spannung je Phase', 'vars' => [
+                ['u_l1_n', 'Spannung L1', 'F', 'NRG.Volt', false, 'voltage', 'FC3 43040 (M_AC_U1)'],
+                ['u_l2_n', 'Spannung L2', 'F', 'NRG.Volt', false, 'voltage', 'FC3 43042 (M_AC_U2)'],
+                ['u_l3_n', 'Spannung L3', 'F', 'NRG.Volt', false, 'voltage', 'FC3 43044 (M_AC_U3)'],
+            ]],
+            'GroupCurrentPhase' => ['caption' => 'Strom je Phase', 'vars' => [
+                ['i_l1', 'Strom L1', 'F', 'NRG.Ampere', false, 'current', 'FC3 43052 (M_AC_I1)'],
+                ['i_l2', 'Strom L2', 'F', 'NRG.Ampere', false, 'current', 'FC3 43054 (M_AC_I2)'],
+                ['i_l3', 'Strom L3', 'F', 'NRG.Ampere', false, 'current', 'FC3 43056 (M_AC_I3)'],
+            ]],
+            'GroupReactiveApparent' => ['caption' => 'Blind-/Scheinleistung / Leistungsfaktor', 'vars' => [
+                ['q_total',  'Blindleistung gesamt',   'F', 'MHB.var', false, 'power', 'FC3 43002 (M_AC_Q)'],
+                ['s_total',  'Scheinleistung gesamt',  'F', 'MHB.VA',  false, 'power', 'FC3 43004 (M_AC_S)'],
+                ['pf_total', 'Leistungsfaktor gesamt', 'F', 'MHB.PF',  false, 'total', 'FC3 43006 (M_AC_PF_COSPHI)'],
+            ]],
+        ];
+    }
+
+    public function getProfiles() { return []; }
+
+    public function getEnumProfiles()
+    {
+        return ['MHB.BlueLogDeviceType' => MHUB_BlueLogScadaInverterDriver::DEVICE_TYPE_ENUM];
+    }
+
+    public function readFast($mb, $hub)
+    {
+        $mb->setWordSwap(true); // blue'Log SCADA: Float32 immer CDAB, live verifiziert
+        $r = $mb->readHolding(43000, 16); // 43000..43015 (M_AC_P .. M_AC_F)
+        if ($r === null) {
+            $hub->SetVarBool('connected', false);
+            return false;
+        }
+        $hub->SetVarBool('connected', true);
+        $hub->SetVarFloat('power_total', $mb->readFloat32($r, 0));  // 43000
+        $hub->SetVarFloat('frequency',   $mb->readFloat32($r, 14)); // 43014
+
+        $t = $mb->readHolding(40000, 1);
+        if ($t !== null) {
+            $hub->SetVarInt('device_type', $mb->u16($t, 0));
+        }
+
+        if ($hub->GroupActive('GroupReactiveApparent')) {
+            $hub->SetVarFloat('q_total',  $mb->readFloat32($r, 2)); // 43002
+            $hub->SetVarFloat('s_total',  $mb->readFloat32($r, 4)); // 43004
+            $hub->SetVarFloat('pf_total', $mb->readFloat32($r, 6)); // 43006
+        }
+
+        if ($hub->GroupActive('GroupVoltagePhase') || $hub->GroupActive('GroupCurrentPhase')) {
+            $p = $mb->readHolding(43040, 18); // 43040..43057
+            if ($p !== null) {
+                if ($hub->GroupActive('GroupVoltagePhase')) {
+                    $hub->SetVarFloat('u_l1_n', $mb->readFloat32($p, 0));  // 43040
+                    $hub->SetVarFloat('u_l2_n', $mb->readFloat32($p, 2));  // 43042
+                    $hub->SetVarFloat('u_l3_n', $mb->readFloat32($p, 4));  // 43044
+                }
+                if ($hub->GroupActive('GroupCurrentPhase')) {
+                    $hub->SetVarFloat('i_l1', $mb->readFloat32($p, 12)); // 43052
+                    $hub->SetVarFloat('i_l2', $mb->readFloat32($p, 14)); // 43054
+                    $hub->SetVarFloat('i_l3', $mb->readFloat32($p, 16)); // 43056
+                }
+            }
+        }
+        return true;
+    }
+
+    public function readSlow($mb, $hub)
+    {
+        $mb->setWordSwap(true);
+        $r = $mb->readHolding(43064, 4); // M_AC_E_EXP (43064) + M_AC_E_IMP (43066)
+        if ($r === null) {
+            return;
+        }
+        $hub->SetVarEnergyWh('energy_export', $mb->readFloat32($r, 0)); // 43064
+        $hub->SetVarEnergyWh('energy_import', $mb->readFloat32($r, 2)); // 43066
+    }
+}
+
+// ---------------------------------------------------------------------------
 // MeterHub — Hauptmodul, lädt den Treiber laut Meter-Property
 // ---------------------------------------------------------------------------
 
@@ -2073,6 +2321,8 @@ class MeterHub extends IPSModule
         'shelly_pro3em'    => 'MHUB_ShellyPro3emDriver',
         'goe_controller'   => 'MHUB_GoeControllerDriver',
         'inexogy'          => 'MHUB_InexogyDriver',
+        'bluelog_scada_inverter' => 'MHUB_BlueLogScadaInverterDriver',
+        'bluelog_scada_meter'    => 'MHUB_BlueLogScadaMeterDriver',
     ];
 
     private const METER_LABELS = [
@@ -2096,6 +2346,8 @@ class MeterHub extends IPSModule
         'shelly_pro3em'    => 'Shelly Pro 3EM',
         'goe_controller'   => 'go-e Controller',
         'inexogy'          => 'Inexogy / Discovergy (Cloud)',
+        'bluelog_scada_inverter' => "Meteocontrol blue'Log SCADA – Wechselrichter",
+        'bluelog_scada_meter'    => "Meteocontrol blue'Log SCADA – Zähler",
     ];
 
     // Funktions-Vokabular für die Zuordnung „welcher Verbraucher hängt hier?".
@@ -2274,7 +2526,7 @@ class MeterHub extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.24.31';
+    private const NEWS_VERSION = '0.24.35';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -2313,15 +2565,9 @@ class MeterHub extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
-                ['type' => 'Label', 'caption' => '• 🆕 Archiv-Verdichtung läuft jetzt automatisch: bei jedem „Übernehmen" wird eine konfigurierbare Staffelung gesetzt (Panel „🗄️ Archiv-Verdichtung", getrennt für Leistung/Energie), statt sie für jeden Datenpunkt von Hand in der Konsole einzustellen.'],
-                ['type' => 'Label', 'caption' => '• Fix: Energiezähler (Bezug/Einspeisung) bekamen bisher den falschen Archiv-Aggregationstyp („Standard" statt „Zähler") — betrifft auch bereits bestehende Instanzen automatisch beim nächsten „Übernehmen".'],
-                ['type' => 'Label', 'caption' => '• 🆕 Neues Feld „Zählerbezeichnung" — benennt die Instanz direkt im Formular um, ohne Umweg über die Konsole.'],
-                ['type' => 'Label', 'caption' => '• 🆕 Neues Feld „Standort" (Raum/Geschoss) — reines Freitext-Label mit Vorschlägen aus bereits benutzten Werten (auch aus MeterHubVirtual-Instanzen).'],
-                ['type' => 'Label', 'caption' => '• 🆕 Zusätzliche „?"-Erklärungen bei „Bezug/Einspeisung vertauscht", „Zusätzliche Sammel-Variablen" und den Archiv-Verdichtungsstufen — bei Bedarf anklicken, ohne den Rest des Formulars zuzutexten.'],
-                ['type' => 'Label', 'caption' => '• Fix: „Übernehmen" konnte mit „Fehler beim Übernehmen der Änderungen" fehlschlagen, wenn eine Verdichtungsstufe auf „aus" stand oder eine Alt-Regel von einer früheren Einstellung im Archiv übrig war — beides räumt die Archiv-Verdichtung jetzt sauber auf.'],
-                ['type' => 'Label', 'caption' => '• 🧡 Neues Panel „Über dieses Modul" ganz unten — Lizenz (PolyForm Noncommercial 1.0.0), Kontakt für gewerbliche Nutzung und ein PayPal-Link für alle, die etwas dalassen möchten.'],
-                ['type' => 'Label', 'caption' => '• 👋 Neue Zweck-Einführung „Wozu dieses Modul?" ganz oben im Formular — kurz und knapp, wofür MeterHub gedacht ist, bevor es an die Bedienung geht.'],
-                ['type' => 'Label', 'caption' => '• 🆕 Zwei neue Funktionen: „Haushaltsgeräte (allgemein)" und „Unterhaltungsmedien" — für einen Sammelzähler, der nicht in die schon vorhandenen Einzelkategorien passt.'],
+                ['type' => 'Label', 'caption' => '• 🆕 Zwei neue Zählertypen: „Meteocontrol blue\'Log SCADA – Wechselrichter/Zähler". Ein blue\'Log-Solarpark-Datenlogger kann jedes angeschlossene Gerät unter einer eigenen „SCADA-Adresse" anbieten (steht am blue\'Log selbst: Geräteliste → Spalte „SCADA Adresse") — diese Adresse ist die Unit-ID der Instanz, NICHT 1.'],
+                ['type' => 'Label', 'caption' => '• Der Wechselrichter-Treiber ist live an einer echten Solarpark-Anlage gegen die dortige, unabhängig konfigurierte Symcon-Verdrahtung verifiziert (Registeradressen, Byte-Reihenfolge, Momentanwert) — der Zähler-Block folgt derselben Registerkarte, aber ohne eigenes Prüfobjekt vor Ort.'],
+                ['type' => 'Label', 'caption' => '• Damit lässt sich eine „Kette" aus vielen einzelnen, per SCADA-Adresse adressierten Geräten hinter einem blue\'Log über mehrere MeterHub-Instanzen abbilden und in MeterHubVirtual zu einer Feld-/NAP-Summe verketten.'],
                 ['type' => 'Button', 'caption' => 'Verstanden – nicht mehr anzeigen', 'onClick' => 'MHUB_AckNews($id);'],
             ],
         ];
@@ -2818,6 +3064,7 @@ class MeterHub extends IPSModule
                         ['type' => 'Label', 'caption' => '🔌 Shelly Pro 3EM: Modbus TCP muss am Gerät erst aktiviert werden (Einstellungen → Modbus, Port 502). Gelesen über FC 0x04, Float wortgetauscht (CDAB); Wire-Adressen = Doku − 30000 (Messwerte ab 1011, Energie 1162/1164). An echtem Gerät verifiziert.'],
                         ['type' => 'Label', 'caption' => '🔌 go-e Controller: Modbus TCP muss am Gerät erst aktiviert werden (go-e-App: Internet → Erweiterte Einstellungen → Modbus, oder HTTP-API men=true) — sonst bleibt Port 502 geschlossen; nach dem Aktivieren die Einstellung ggf. einmal aus-/einschalten. Kernwerte kommen aus der Kategorie Grid; Sensoren 1-6 und die Kategorien Home/Car/Relais/Solar/Akku sind zuschaltbar. An echtem Gerät verifiziert. (Die go-e-Wallboxen selbst bedient das Modul ChargerHub.)'],
                         ['type' => 'Label', 'caption' => '⚠️ go-e Controller + Überschussladen: Der Controller kann die go-e-Wallboxen SELBST regeln (PV-Überschussladen, Lastbegrenzung — geräteinterne Regelschleife). Soll stattdessen ein EMS die Wallboxen steuern, muss diese interne Regelung an den Wallboxen deaktiviert sein — sonst arbeiten zwei Regler gegeneinander. Dieses Modul liest nur und ist davon nicht betroffen; der Regelzustand ist per Modbus nicht sichtbar, sondern nur an den Wallboxen selbst (go-e-API: usePvSurplus, Lastmanagement, modelStatus).'],
+                        ['type' => 'Label', 'caption' => '🆕 Meteocontrol blue\'Log SCADA: Ein blue\'Log kann JEDES angeschlossene Gerät (Wechselrichter, Zähler …) unter einer eigenen „SCADA-Adresse" anbieten — diese Adresse ist die Unit-ID unten, NICHT 1. Die Zuordnung steht auf dem blue\'Log selbst (Geräteliste → Spalte „SCADA Adresse"); Adresse 97 ist das blue\'Log selbst (Summenwerte). FC 0x03, Float wortgetauscht (CDAB) — an Dietmars Solarpark verifiziert.'],
                         ['type' => 'Label', 'caption' => 'ℹ️ Vorzeichen-Konvention: + = Bezug aus dem Netz, − = Einspeisung. Stimmt die Richtung an der eigenen Anlage nicht, hilft der Invers-Schalter unten.'],
                         ['type' => 'Label', 'caption' => '🔧 Anschluss: Die Zähler nutzen Modbus-TCP-Port 502. Die Unit-/Geräteadresse ist ab Werk meist 1 (der PAC2200 antwortet oft auch unabhängig von der Unit-ID).'],
                         ['type' => 'Label', 'caption' => '⚠️ UMG 800: Dessen Modbus-Zuordnung ist frei konfigurierbar — dieser Treiber folgt der ausgelieferten Werksvorgabe. Wurde sie im Gerät (GridVis) geändert, stimmen die Adressen ggf. nicht.'],
@@ -2871,6 +3118,8 @@ class MeterHub extends IPSModule
                         ['caption' => 'Shelly Pro 3EM', 'value' => 'shelly_pro3em'],
                         ['caption' => 'go-e Controller', 'value' => 'goe_controller'],
                         ['caption' => 'Inexogy / Discovergy (Cloud-API, kein Modbus)', 'value' => 'inexogy'],
+                        ['caption' => 'Meteocontrol blue\'Log SCADA – Wechselrichter (SCADA-Adresse = Unit-ID)', 'value' => 'bluelog_scada_inverter'],
+                        ['caption' => 'Meteocontrol blue\'Log SCADA – Zähler (SCADA-Adresse = Unit-ID)', 'value' => 'bluelog_scada_meter'],
                     ],
                 ],
                 [
@@ -3905,6 +4154,7 @@ class MeterHub extends IPSModule
         'quality' => 'Netzqualität',
         'device'  => 'Gerät',
         'errors'  => 'Fehler / Verbindung',
+        'dc'      => 'Gleichstrom (DC)',
     ];
 
     private function EnsureCategory($key)

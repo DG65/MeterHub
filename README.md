@@ -1,7 +1,7 @@
 # MeterHub
 
 ![Symcon](https://img.shields.io/badge/Symcon-PHPModul-blue)
-![Modul Version](https://img.shields.io/badge/Modul_Version-0.24.34--beta.1-blue)
+![Modul Version](https://img.shields.io/badge/Modul_Version-0.24.35--beta.1-blue)
 ![Symcon Version](https://img.shields.io/badge/Symcon_Version-9.0%2B-blue)
 ![License](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-lightgrey)
 [![Check Style](https://github.com/DG65/NRGMeterHub/actions/workflows/check-style.yml/badge.svg)](https://github.com/DG65/NRGMeterHub/actions/workflows/check-style.yml)
@@ -37,6 +37,8 @@ Ein herzliches Dankeschön an **Sepp Lausch** ([seppm im Symcon-Forum](https://c
 | **go-e Controller** | Kern aus der Kategorie **Grid** (Wirkleistung, Energie Bezug/Abgabe), Ø U/I, optional U je Phase + N, I je Phase + N, **Stromsensoren 1–6** (I/P/cos φ) und die Kategorien **Home/Car/Relais/Solar/Akku** (Leistung + Energie Ein/Aus) | **FC 0x04**, Float32/Float64 Big-Endian; Wire-Adresse = Doku − 30001 (Spannungen ab 1000, Sensoren ab 1010, Kategorie-Blöcke im 26er-Raster ab 1046). Keine Frequenz (Register nicht implementiert); unbelegte Register liefern NaN statt Fehler und werden verworfen. An echtem Gerät verifiziert. **Modbus TCP am Gerät aktivieren** (go-e-App: Internet → Erweiterte Einstellungen → Modbus; danach ggf. einmal aus-/einschalten). Die go-e-**Wallboxen** bedient das Schwestermodul ChargerHub. |
 
 | **Inexogy / Discovergy** (Cloud) | Bezug/Einspeisung (kumulativ, kWh), Gesamtleistung, optional Leistung und Spannung je Phase | **Kein Modbus** — Cloud-API (`api.inexogy.com`) über **OAuth 1.0a**. E-Mail/Passwort einmal beim Einrichten, danach nur Zugriffs-Token (kein Klartext-Passwort). Für das abrechnungsverbindliche iMSys am Netzübergabepunkt; als solches kennzeichnen (Checkbox oben). Skalierung aus dem Alt-Modul verifiziert und gegen echte Zählerwerte geprüft; der OAuth-Handshake ist am eigenen Konto zu bestätigen. |
+| **Meteocontrol blue'Log SCADA – Wechselrichter** | Wirkleistung AC, Ertrag gesamt (kumulativ), Netzfrequenz, Gerätetyp-Rückmeldung, optional U/I je Phase (AC) und Gleichstromseite (P/U/I) | **FC 0x03**, Float32 **wortgetauscht (CDAB)**, Registerblock ab 41000. Liest **ein** Gerät hinter einem blue'Log-Solarpark-Datenlogger über dessen **SCADA-Adresse** (= `UnitId` dieser Instanz — steht am blue'Log selbst: Geräteliste → Spalte „SCADA Adresse", NICHT 1). Byte-Reihenfolge und Momentanwert live an einer echten Solarpark-Anlage gegen unabhängig konfigurierte Verdrahtung verifiziert. |
+| **Meteocontrol blue'Log SCADA – Zähler** | Wirkleistung gesamt, Bezug/Abgabe (kumulativ), Netzfrequenz, Gerätetyp-Rückmeldung, optional U/I je Phase, Blind-/Scheinleistung, Leistungsfaktor | **FC 0x03**, Float32 wortgetauscht (CDAB), Registerblock ab 43000 — gleiches Adressprinzip wie oben. Byte-Reihenfolge/Adress-Mechanismus verifiziert, die konkreten Registeradressen dieses Blocks hatten an der Test-Anlage aber kein eigenes Prüfobjekt (kein einzeln adressierter SCADA-Zähler vorhanden) — vor produktivem Einsatz gegen die Geräteanzeige abgleichen. |
 
 > ⚠️ **go-e Controller und Überschussladen — Zwei-Regler-Warnung:** Der Controller ist nicht
 > nur Messzentrale. Je nach Konfiguration regelt er die go-e-Wallboxen **selbst**
