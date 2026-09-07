@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.24.36-beta.1 (2026-09-07)
+
+- **Neuer Suchmodus in MeterHubDiscovery: „blue'Log SCADA-Adressbereich".** Dietmars Auftrag
+  „universeller Treiber für die blue'Logs" — Teil 2. Bisher fand MeterHubDiscovery Zähler nur
+  über einen IP-Bereich (ein Gerät je IP). Bei einem Meteocontrol-blue'Log ist es umgekehrt: EIN
+  fest bekannter Datenlogger, aber viele dahinter angeschlossene Geräte, jedes über seine eigene,
+  am blue'Log selbst frei vergebene SCADA-Adresse. Neuer Suchlauf (`MHUBD_DiscoverBlueLog`)
+  fragt Register 40000 (Gerätetyp) über einen konfigurierbaren SCADA-Adressbereich ab, schlägt
+  jede erkannte, unterstützte Adresse (Wechselrichter/Zähler) als eigene MeterHub-Instanz vor —
+  dieselbe Fundliste/„Erstellen"-Mechanik wie beim bestehenden IP-Suchlauf, keine Verdopplung.
+  Nicht unterstützte Gerätetypen (Sensor, Tracker, Genset, Batterie, Kraftwerksregler, das
+  blue'Log selbst) werden erkannt, aber bewusst nicht vorgeschlagen. Modellbezeichnung (Register
+  40033) fließt zur besseren Beschriftung mit ein. Live an Dietmars Solarpark verifiziert:
+  Adresse 97 (das blue'Log selbst) korrekt als „nicht unterstützt" übersprungen, mehrere echte
+  Wechselrichter-Adressen korrekt erkannt samt Modellbezeichnung, unbelegte Adressen liefern
+  sauber „keine Antwort" statt eines Fehlers. Damit lässt sich die „Kette" aus vielen einzelnen
+  SCADA-Geräten (siehe 0.24.35) jetzt per Suchlauf statt Handarbeit aufbauen.
+
 ## 0.24.35-beta.1 (2026-09-07)
 
 - **Zwei neue Zählertypen: Meteocontrol blue'Log SCADA (Wechselrichter/Zähler).** Dietmars

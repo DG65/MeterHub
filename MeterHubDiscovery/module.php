@@ -47,6 +47,21 @@ class MeterHubDiscovery extends IPSModule
         'goe_controller'   => 'go-e Controller',
     ];
 
+    // Gerätetyp-Register 40000 der blue'Log-SCADA-Schnittstelle → MeterHub-
+    // Zählertyp. Nur die von MeterHub bereits unterstützten Typen (siehe
+    // MHUB_BlueLogScadaInverterDriver::DEVICE_TYPE_ENUM in MeterHub/module.php
+    // für alle zehn vom Hersteller definierten Typen) — ein Sensor/Tracker/
+    // Genset/Batterie/Kraftwerksregler an dieser Adresse wird gefunden, aber
+    // bewusst NICHT vorgeschlagen (kein passender Treiber vorhanden).
+    private const BLUELOG_METER_MAP = [
+        1 => 'bluelog_scada_inverter',
+        3 => 'bluelog_scada_meter',
+    ];
+    private const BLUELOG_TYPE_LABELS = [
+        1 => 'Wechselrichter',
+        3 => 'Zähler',
+    ];
+
     public function Create()
     {
         parent::Create();
@@ -57,6 +72,17 @@ class MeterHubDiscovery extends IPSModule
         $this->RegisterPropertyInteger('Port', 502);
         $this->RegisterPropertyString('NameTemplate', '');
         $this->RegisterPropertyString('IgnoreIPs', '');
+        // Zweiter Suchmodus (Dietmars Auftrag „universeller blue'Log-Treiber",
+        // Teil 2, 07.09.2026): EIN fest bekannter blue'Log (Solarpark-
+        // Datenlogger), aber viele dahinter angeschlossene Geräte, jedes über
+        // seine eigene, am blue'Log frei vergebene SCADA-Adresse (= Unit-ID)
+        // erreichbar — daher ein Adressbereich statt eines IP-Bereichs. Siehe
+        // MHUB_BlueLogScadaInverterDriver in MeterHub/module.php für die volle
+        // Herleitung der SCADA-Adresse.
+        $this->RegisterPropertyString('BlueLogHost', '');
+        $this->RegisterPropertyInteger('BlueLogPort', 502);
+        $this->RegisterPropertyInteger('ScadaAddrStart', 100);
+        $this->RegisterPropertyInteger('ScadaAddrEnd', 199);
         $this->RegisterAttributeString('ResultsJSON', '[]');
         // Für die Status-Kopfzeile (siehe ScanSummaryLine()) — Verbund-Konvention
         // „Einheitliche Verbund-Status-Kopfzeile" (SUITE.md, 20.08.2026).
@@ -78,7 +104,7 @@ class MeterHubDiscovery extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.24.27';
+    private const NEWS_VERSION = '0.24.36';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -117,6 +143,7 @@ class MeterHubDiscovery extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
+                ['type' => 'Label', 'caption' => '• 🆕 Neuer zweiter Suchmodus „blue\'Log SCADA-Adressbereich": statt eines IP-Bereichs EIN fest bekannter Meteocontrol-blue\'Log-Solarpark-Datenlogger, aber viele dahinter angeschlossene Geräte (Wechselrichter, Zähler …) über ihre eigene, am blue\'Log selbst frei vergebene SCADA-Adresse. Findet und schlägt jedes unterstützte Gerät als eigene MeterHub-Instanz vor — dieselbe Fundliste/„Erstellen"-Mechanik wie beim normalen Netzwerk-Suchlauf.'],
                 ['type' => 'Label', 'caption' => '• 🔀 Migration von einer Alt-Instanz (anderes Modul, gleiche IP/Unit-ID): „Migration vorbereiten" verknüpft automatisch mit MigrationsHub — Simulieren/Ausführen bleiben dort bewusst manuelle Schritte. Details über das „?" beim Knopf.'],
                 ['type' => 'Label', 'caption' => '• Die Suche lässt sich jederzeit abbrechen („✖ Suche abbrechen"), die Kopfzeile zeigt live, wie viele Zähler bereits gefunden wurden.'],
                 ['type' => 'Label', 'caption' => '• Erkennt inzwischen neun Zählertypen: Siemens PAC2200, Janitza UMG (klassisch + UMG 800), Shelly Pro 3EM, Carlo Gavazzi EM24/ET340, WhatWatt, Phoenix EEM-EM375, Eastron SDM72D/SDM630, go-e Controller. Details über das „?" beim Suche-Knopf.'],
@@ -369,6 +396,21 @@ class MeterHubDiscovery extends IPSModule
                 ],
                 [
                     'type'    => 'ExpansionPanel',
+                    'caption' => "🆕 🔎  blue'Log SCADA-Adressbereich",
+                    'expanded' => false,
+                    'items' => [
+                        ['type' => 'Label', 'caption' => 'Für Meteocontrol-blue\'Log-Solarpark-Datenlogger: EIN fest bekannter blue\'Log, aber viele dahinter angeschlossene Geräte (Wechselrichter, Zähler …) — jedes über seine eigene, am blue\'Log selbst frei vergebene „SCADA-Adresse" erreichbar (Geräteliste am blue\'Log → Spalte „SCADA Adresse").'],
+                        ['type' => 'ValidationTextBox', 'name' => 'BlueLogHost', 'caption' => "blue'Log-IP-Adresse", 'validate' => '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$'],
+                        ['type' => 'NumberSpinner', 'name' => 'BlueLogPort', 'caption' => 'Modbus-TCP-Port', 'minimum' => 1, 'maximum' => 65535],
+                        ['type' => 'NumberSpinner', 'name' => 'ScadaAddrStart', 'caption' => 'SCADA-Adresse von', 'minimum' => 1, 'maximum' => 247],
+                        ['type' => 'NumberSpinner', 'name' => 'ScadaAddrEnd',   'caption' => 'SCADA-Adresse bis',  'minimum' => 1, 'maximum' => 247],
+                        ['type' => 'Label', 'caption' => 'Adresse 97 ist üblicherweise das blue\'Log selbst (Summenwerte, hier nicht relevant) — der Bereich der angeschlossenen Einzelgeräte steht in derselben Spalte am blue\'Log, oft ab 100 aufwärts.'],
+                        ['type' => 'Button', 'name' => 'BtnScanBlueLog',  'caption' => "🔎  blue'Log-Adressbereich durchsuchen", 'onClick' => 'MHUBD_DiscoverBlueLog($id);'],
+                        ['type' => 'Button', 'name' => 'BtnAbortBlueLog', 'caption' => '✖  Suche abbrechen', 'onClick' => 'MHUBD_AbortScan($id);', 'visible' => false],
+                    ],
+                ],
+                [
+                    'type'    => 'ExpansionPanel',
                     'caption' => '🛠️  Erstellen',
                     'expanded' => true,
                     'items' => [
@@ -513,6 +555,123 @@ class MeterHubDiscovery extends IPSModule
         // Button-Sichtbarkeit ohnehin bestehen.
         @$this->UpdateFormField('ScanSummary', 'caption', $this->ScanSummaryLine());
         $this->ReloadForm();
+    }
+
+    /**
+     * Zweiter Suchmodus: EIN fest bekannter blue'Log, aber viele dahinter
+     * angeschlossene Geräte über ihre eigene SCADA-Adresse (= Unit-ID) statt
+     * eines IP-Bereichs. Schreibt in dieselbe `ResultsJSON`/`Configurator`-
+     * Fundliste wie Discover() — deren Zeilenformat (ip/unitId/meter/label)
+     * ist identisch, ein zweiter Ergebnis-Mechanismus wäre unnötige
+     * Verdopplung. Ein Suchlauf ersetzt jeweils die Funde des anderen Modus
+     * (wie bei Discover() selbst auch: neu suchen überschreibt alte Funde).
+     */
+    public function DiscoverBlueLog()
+    {
+        $host = trim($this->ReadPropertyString('BlueLogHost'));
+        $port = $this->ReadPropertyInteger('BlueLogPort');
+        $from = $this->ReadPropertyInteger('ScadaAddrStart');
+        $to   = $this->ReadPropertyInteger('ScadaAddrEnd');
+
+        if ($host === '') {
+            $this->SetStatus(104);
+            @$this->UpdateFormField('ScanSummary', 'caption', "❌ blue'Log-IP-Adresse fehlt — bitte eintragen und übernehmen.");
+            return;
+        }
+        if ($to < $from) {
+            [$from, $to] = [$to, $from];
+        }
+
+        if (@IPS_GetObjectIDByIdent('ScanAbort', $this->InstanceID)) {
+            $this->SetValue('ScanAbort', false);
+        }
+        @$this->UpdateFormField('BtnScanBlueLog', 'visible', false);
+        @$this->UpdateFormField('BtnAbortBlueLog', 'visible', true);
+
+        $addrs = range($from, $to);
+        // Sicherheitsgrenze wie bei Discover()s IP-Bereich (dort 1024) — der
+        // SCADA-Adressraum (0..247, Modbus-Unit-ID) ist ohnehin viel kleiner.
+        if (count($addrs) > 247) {
+            $addrs = array_slice($addrs, 0, 247);
+        }
+
+        $this->ShowProgress("Prüfe " . count($addrs) . " SCADA-Adressen an $host:$port …", 0);
+
+        $results = [];
+        $total   = count($addrs);
+        $i       = 0;
+        $aborted = $this->scanAborted();
+        foreach ($addrs as $addr) {
+            if ($this->scanAborted()) { $aborted = true; break; }
+            $i++;
+            $this->ShowProgress("SCADA-Adresse $addr ($i von $total) …", (int)round(($i / max(1, $total)) * 100));
+            $found = $this->identifyBlueLogDevice($host, $port, $addr);
+            if ($found !== null) {
+                $results[] = $found;
+            }
+        }
+
+        if ($aborted) {
+            $this->ShowProgress('Suche abgebrochen – ' . count($results) . ' Geräte bis dahin gefunden.', 100);
+        } else {
+            $this->ShowProgress('Fertig: ' . count($results) . ' Geräte gefunden (von ' . $total . ' geprüften Adressen).', 100);
+        }
+
+        $this->WriteAttributeString('ResultsJSON', json_encode($results));
+        $this->WriteAttributeInteger('LastScanTs', time());
+        $this->SetStatus(102);
+        @$this->UpdateFormField('ScanSummary', 'caption', $this->ScanSummaryLine());
+        $this->ReloadForm();
+    }
+
+    /**
+     * Eine SCADA-Adresse prüfen: Register 40000 (Gerätetyp) lesen. Keine
+     * Antwort = keine Adresse belegt, dort einfach nichts (kein Fehler).
+     * Unbekannter/nicht unterstützter Gerätetyp (Sensor, Tracker, Genset,
+     * Batterie, Kraftwerksregler, das blue'Log selbst @ 97) wird gefunden,
+     * aber bewusst NICHT vorgeschlagen — dafür gibt es noch keinen Treiber.
+     * Modell-String (40033) nur zur schöneren Beschriftung, rein optional.
+     */
+    private function identifyBlueLogDevice($host, $port, $unitId)
+    {
+        $type = $this->readU16Holding($host, $port, $unitId, 40000, 1.0);
+        if ($type === null || !isset(self::BLUELOG_METER_MAP[$type])) {
+            return null;
+        }
+        $model = trim((string)$this->readAscii($host, $port, $unitId, 40033, 32, 1.5));
+        $label = self::BLUELOG_TYPE_LABELS[$type] . ($model !== '' ? " ($model)" : '');
+        return [
+            'ip'     => $host,
+            'unitId' => $unitId,
+            'meter'  => self::BLUELOG_METER_MAP[$type],
+            'label'  => $label,
+        ];
+    }
+
+    // UInt16 per FC 0x03 (Holding-Register) — blue'Log-SCADA-Gerätetyp (40000).
+    private function readU16Holding($host, $port, $unitId, $startReg, $timeout)
+    {
+        $regs = $this->readHolding($host, $port, $unitId, $startReg, 1, $timeout);
+        if ($regs === null || count($regs) < 1) {
+            return null;
+        }
+        return $regs[0] & 0xFFFF;
+    }
+
+    // ASCII-String über mehrere Register (je 2 Zeichen groß-endian, mit 0x00
+    // aufgefüllt) — Meteocontrol-SCADA-Konvention für Vendor/Model/Serial.
+    private function readAscii($host, $port, $unitId, $startReg, $regCount, $timeout)
+    {
+        $regs = $this->readHolding($host, $port, $unitId, $startReg, $regCount, $timeout);
+        if ($regs === null) {
+            return null;
+        }
+        $bytes = '';
+        for ($i = 0; $i < $regCount; $i++) {
+            $v = $regs[$i] ?? 0;
+            $bytes .= chr(($v >> 8) & 0xFF) . chr($v & 0xFF);
+        }
+        return rtrim($bytes, "\x00");
     }
 
     private function findExistingInstances()

@@ -1,7 +1,7 @@
 # MeterHub
 
 ![Symcon](https://img.shields.io/badge/Symcon-PHPModul-blue)
-![Modul Version](https://img.shields.io/badge/Modul_Version-0.24.35--beta.1-blue)
+![Modul Version](https://img.shields.io/badge/Modul_Version-0.24.36--beta.1-blue)
 ![Symcon Version](https://img.shields.io/badge/Symcon_Version-9.0%2B-blue)
 ![License](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-lightgrey)
 [![Check Style](https://github.com/DG65/NRGMeterHub/actions/workflows/check-style.yml/badge.svg)](https://github.com/DG65/NRGMeterHub/actions/workflows/check-style.yml)
@@ -130,6 +130,15 @@ gedacht für andere Modbus-Geräte, die sonst Probe-Zeit kosten. Mehrere IPs Kom
 **Namens-Vorlage:** leer lassen für den Standard „Zählertyp + laufende Nummer", oder ein
 eigenes Muster mit den Platzhaltern `{zaehler}` `{ip}` `{unitid}` `{nr}` eintragen (z. B.
 `{zaehler} Keller ({ip})`).
+
+**Zweiter Suchmodus — blue'Log SCADA-Adressbereich:** für Meteocontrol-blue'Log-Solarpark-
+Datenlogger. Statt eines IP-Bereichs (ein Gerät je IP) EIN fest bekannter blue'Log, aber viele
+dahinter angeschlossene Geräte — jedes über seine eigene, am blue'Log selbst frei vergebene
+SCADA-Adresse (Geräteliste am blue'Log → Spalte „SCADA Adresse"). blue'Log-IP, Port und
+SCADA-Adressbereich eintragen, „blue'Log-Adressbereich durchsuchen" klicken — jede erkannte,
+unterstützte Adresse (Wechselrichter/Zähler) erscheint in derselben Ergebnistabelle wie beim
+normalen Netzwerk-Suchlauf. Nicht unterstützte Gerätetypen (Sensor, Tracker, Genset, Batterie,
+Kraftwerksregler, das blue'Log selbst) werden gefunden, aber bewusst nicht vorgeschlagen.
 
 ## Funktionszuordnung (welcher Verbraucher hängt hier?)
 
