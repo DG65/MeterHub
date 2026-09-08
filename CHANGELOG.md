@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.24.44-beta.1 (2026-09-08)
+
+- **🔧 Kritischer Fix: blue'Log-Erkennung fand in der Praxis NICHTS.** Direkt nach dem Ausliefern
+  von 0.24.43-beta.1 gemeldet: „Wir haben im Netzwerk etwa 15 blue'Log und Du findest keinen
+  Einzigen!" Live am Solarpark gemessen, zwei Ursachen gefunden — keine davon eine falsche
+  Register-/Slave-Wahl:
+  - **Verbindungs-Konkurrenz mit Dietmars eigenen, parallel laufenden Regel-Skripten.**
+    Isolierte, einzelne Modbus-TCP-Verbindungen zu einem blue'Log funktionieren zuverlässig;
+    mehrere rasch aufeinanderfolgende Verbindungen zum selben Gerät (wie es `identifyMeter()` +
+    `identifyBlueLogHost()` bisher ungebremst taten) scheitern dagegen reihenweise, verschärft
+    durch parallelen Zugriff der bereits laufenden Skripte. Jede Schnittstellen-Prüfung bekommt
+    jetzt bis zu drei Versuche mit wachsender Pause (300/600/1200 ms) statt eines einzigen
+    ungepufferten Versuchs.
+  - **Falsche Prioritäten für die tatsächliche Geräteflotte.** An Dietmars Solarpark haben von
+    ~15 blue'Logs nur die zwei Master-/EZA-Regler Power Control/RPC, SCADA dagegen praktisch
+    alle — die Erkennung prüft deshalb wieder zuerst SCADA (Register 40000, Gerätetyp 0), Power
+    Control/RPC nur noch als Rückfall für die Sonderfälle. Vermeidet zusätzlich zwei von
+    vornherein aussichtslose Verbindungen für den Regelfall.
+  - Live bestätigt: mindestens zwei unabhängige blue'Logs (192.168.200.201, .204) antworten
+    zuverlässig über SCADA. Ein Port-502-Suchlauf im Solarpark-Subnetz fand daneben auch ein
+    fremdes Gerät (Geutebrück-Videoserver) mit offenem Modbus-Port, das aber auf keiner der drei
+    blue'Log-Schnittstellen antwortet — kein Fehlalarm.
+  - **Kein Anspruch auf 100 % Trefferquote bei aktiver Fremdlast:** die Wiederholungen erhöhen
+    die Erfolgsquote deutlich, können echte Dauerkonkurrenz mit fremdem Datenverkehr aber nicht
+    vollständig ausschließen — ein zweiter Suchlauf findet typischerweise mehr.
+
 ## 0.24.43-beta.1 (2026-09-08)
 
 - **🔧 Konstruktionsfehler behoben: „🔎 Netzwerk durchsuchen" fand blue'Logs nicht.** Dietmars

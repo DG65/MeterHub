@@ -61,6 +61,19 @@ class MeterHubDiscovery extends IPSModule
         1 => 'Wechselrichter',
         3 => 'Zähler',
     ];
+    // Mindestabstand zwischen zwei Modbus-TCP-Verbindungen zur SELBEN
+    // blue'Log-IP. Live am Solarpark isoliert (08.09.2026, Dietmars Fund:
+    // 15 echte blue'Logs im Netz, keiner gefunden): Verbindungsversuche im
+    // 150-ms-Abstand scheitern bei diesem Gerät durchgängig (0 von 8 bzw.
+    // 0 von 10 in mehreren Testläufen), ab 250 ms klappt es zuverlässig
+    // (mehrfach 5/5, 6/6, 3/3) — offenbar verweigert das eingebettete
+    // Modbus-TCP der blue'Log eine neue Verbindung, solange die vorherige
+    // noch "nachwirkt". 300 ms als Sicherheitsabstand über der beobachteten
+    // Schwelle. Kein Problem der falschen Slave-ID/Register (die identische
+    // Anfrage isoliert, mit Pause, antwortet zuverlässig) — ein reines
+    // Verbindungstempo-Problem, das jede noch so genaue Registerwahl
+    // umgeht hätte.
+    private const BLUELOG_CONN_PACING_US = 300000;
 
     public function Create()
     {
@@ -104,7 +117,7 @@ class MeterHubDiscovery extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.24.43';
+    private const NEWS_VERSION = '0.24.44';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -143,6 +156,7 @@ class MeterHubDiscovery extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
+                ['type' => 'Label', 'caption' => '• 🔧 Fix: blue\'Log-Erkennung fand in der Praxis KEINEN einzigen blue\'Log (Dietmars Live-Fund: 15 echte Geräte im Netz, null Treffer). Ursache laut Live-Messung: mehrere rasch aufeinanderfolgende Modbus-TCP-Verbindungen zum selben Gerät scheitern reihenweise, besonders bei parallel laufenden eigenen Regel-Skripten — jede Schnittstellen-Prüfung bekommt jetzt bis zu drei Versuche mit wachsender Pause. Reihenfolge zusätzlich an die reale Geräteflotte angepasst: SCADA zuerst (meist vorhanden), Power Control/RPC nur noch als Rückfall für Master-/EZA-Regler.'],
                 ['type' => 'Label', 'caption' => '• 🆕 „🔎 Netzwerk durchsuchen" erkennt Meteocontrol-blue\'Log-Datenlogger jetzt von sich aus — keine vorher bekannte IP mehr nötig. Bei einem Treffer wird automatisch der eingestellte SCADA-Adressbereich dahinter mitdurchsucht, dieselbe Fundliste wie bei klassischen Zählern.'],
                 ['type' => 'Label', 'caption' => '• 🆕 Neuer zweiter Suchmodus „blue\'Log SCADA-Adressbereich": statt eines IP-Bereichs EIN fest bekannter Meteocontrol-blue\'Log-Solarpark-Datenlogger, aber viele dahinter angeschlossene Geräte (Wechselrichter, Zähler …) über ihre eigene, am blue\'Log selbst frei vergebene SCADA-Adresse. Findet und schlägt jedes unterstützte Gerät als eigene MeterHub-Instanz vor — dieselbe Fundliste/„Erstellen"-Mechanik wie beim normalen Netzwerk-Suchlauf. Bleibt der schnellere, gezielte Weg, wenn die IP schon bekannt ist.'],
                 ['type' => 'Label', 'caption' => '• 🆕 Neuer Platzhalter `{busaddr}` (RS485-Busadresse) für die „Namens-Vorlage" — nützlich, um viele gleichartige blue\'Log-Funde (z. B. 100 Wechselrichter) nach einem eigenen Muster statt einer reinen laufenden Nummer zu benennen.'],
@@ -690,6 +704,7 @@ class MeterHubDiscovery extends IPSModule
                 $blueLogsFound++;
                 foreach (range($scadaFrom, $scadaTo) as $addr) {
                     if ($this->scanAborted()) { $aborted = true; break 2; }
+                    usleep(self::BLUELOG_CONN_PACING_US);
                     $this->ShowProgress("blue'Log $ip gefunden — SCADA-Adresse $addr …", (int)round(($i / max(1, $total)) * 100));
                     $blueLogFound = $this->identifyBlueLogDevice($ip, $port, $addr);
                     if ($blueLogFound !== null) {
@@ -769,6 +784,9 @@ class MeterHubDiscovery extends IPSModule
         foreach ($addrs as $addr) {
             if ($this->scanAborted()) { $aborted = true; break; }
             $i++;
+            if ($i > 1) {
+                usleep(self::BLUELOG_CONN_PACING_US);
+            }
             $this->ShowProgress("SCADA-Adresse $addr ($i von $total) …", (int)round(($i / max(1, $total)) * 100));
             $found = $this->identifyBlueLogDevice($host, $port, $addr);
             if ($found !== null) {
@@ -790,18 +808,68 @@ class MeterHubDiscovery extends IPSModule
     }
 
     /**
-     * Ist an dieser IP ein blue'Log selbst erreichbar (SCADA-Adresse 97,
-     * Gerätetyp 0 = "Data logger")? Dietmars berechtigter Einwand
+     * Ist an dieser IP ein blue'Log erreichbar? Dietmars berechtigter Einwand
      * 08.09.2026: "wenn ich Zähler im Netzwerk suchen lasse, dann möchte ich
      * auch die blue'Logs angezeigt bekommen" — der normale IP-Bereichs-
      * Suchlauf setzte bis dahin voraus, dass man die blue'Log-IP schon
      * kennt. Jetzt prüft `Discover()` das für jede offene IP automatisch
      * mit und durchsucht bei einem Treffer direkt den SCADA-Adressbereich
      * dahinter — kein separater manueller Schritt mehr nötig.
+     *
+     * ZWEITE KORREKTUR, noch am selben Tag (Dietmars Live-Angabe zur
+     * tatsächlichen Solarpark-Flotte): An seiner Anlage haben von ~15
+     * blue'Logs nur die zwei Master-/EZA-Regler Power Control/RPC, SCADA
+     * dagegen (nach seiner Kenntnis) praktisch alle. SCADA deshalb wieder
+     * ZUERST (deckt den Regelfall mit einer einzigen Verbindung ab, nicht
+     * drei), Power Control/RPC nur noch als Rückfall für die zwei
+     * Sonderfälle bzw. Installationen ohne SCADA-Lizenz. Live am Solarpark
+     * gemessen: Reihenfolge PC→RPC→SCADA hätte für die meisten seiner
+     * Geräte ZWEI von Anfang an aussichtslose Verbindungen verschwendet,
+     * bevor die eigentlich passende Schnittstelle überhaupt versucht wird —
+     * bei der unten dokumentierten Verbindungs-Empfindlichkeit ein
+     * unnötiges zusätzliches Risiko.
+     *
+     * DRITTE KORREKTUR, noch am selben Tag (Dietmar bestätigt: seine
+     * eigenen "Schreiberling"-Skripte laufen parallel und greifen aktiv auf
+     * dieselben Geräte zu): eine einzelne feste Pause reicht gegen echte
+     * Verbindungs-Konkurrenz mit fremdem Datenverkehr nicht zuverlässig
+     * (live gemessen: auch 300 ms nach vorherigen Verbindungen zur selben
+     * IP scheiterten in einem Testlauf alle drei Schnittstellen). Jede
+     * Schnittstelle bekommt deshalb bis zu zwei Versuche mit steigendem
+     * Abstand (`probeBlueLogInterface()`), statt nach einem einzigen
+     * Fehlversuch sofort zur nächsten Schnittstelle zu wechseln.
      */
     private function identifyBlueLogHost($host, $port): bool
     {
-        return $this->readU16Holding($host, $port, 97, 40000, 0.5) === 0;
+        if ($this->probeBlueLogInterface(function () use ($host, $port) {
+            return $this->readU16Holding($host, $port, 97, 40000, 0.5) === 0; // SCADA: device_type
+        })) {
+            return true;
+        }
+        if ($this->probeBlueLogInterface(function () use ($host, $port) {
+            $f = $this->readFloatSw($host, $port, 1, 98, 0.5); // Power Control: PPC_F_AC
+            return $f !== null && $f >= 45.0 && $f <= 65.0;
+        })) {
+            return true;
+        }
+        return $this->probeBlueLogInterface(function () use ($host, $port) {
+            $f = $this->readFloatSw($host, $port, 10, 42, 0.5); // RPC: PPC_F_AC
+            return $f !== null && $f >= 45.0 && $f <= 65.0;
+        });
+    }
+
+    // Ein Verbindungsversuch mit einer Wiederholung nach längerer Pause,
+    // falls der erste scheitert — siehe die dritte Korrektur im Kommentar
+    // oben. $attempt liefert true/false, ohne selbst zu pausieren.
+    private function probeBlueLogInterface(callable $attempt): bool
+    {
+        foreach ([1, 2, 4] as $backoffFactor) {
+            usleep(self::BLUELOG_CONN_PACING_US * $backoffFactor);
+            if ($attempt()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1242,6 +1310,21 @@ class MeterHubDiscovery extends IPSModule
     private function readHolding($host, $port, $unitId, $startReg, $count, $timeout)
     {
         return $this->modbusRead($host, $port, $unitId, 0x03, $startReg, $count, $timeout);
+    }
+
+    // Float32 mit getauschter Wortreihenfolge (CDAB) per FC 0x03 — blue'Log
+    // Power-Control-/RPC-Schnittstellen (ByteOrder 3, live verifiziert über
+    // IPS_GetConfiguration() bestehender ModBus-Address-Instanzen am
+    // Solarpark, siehe MHUB_BlueLogPowerControlDriver/MHUB_BlueLogRpcDriver
+    // in MeterHub/module.php).
+    private function readFloatSw($host, $port, $unitId, $startReg, $timeout)
+    {
+        $regs = $this->readHolding($host, $port, $unitId, $startReg, 2, $timeout);
+        if ($regs === null || count($regs) < 2) {
+            return null;
+        }
+        $f = (float)(unpack('G', pack('nn', $regs[1] & 0xFFFF, $regs[0] & 0xFFFF))[1] ?? 0.0);
+        return is_finite($f) ? $f : null;
     }
 
     private function readInput($host, $port, $unitId, $startReg, $count, $timeout)
