@@ -321,7 +321,10 @@ class MeterHubDiscovery extends IPSModule
             $ok = $this->probeUnitResponds($host, $port, $unitId, 1.0);
             $parts[] = ($ok ? '✅ ' : '— ') . "$label (Slave-ID $unitId)";
         }
-        return implode('  ·  ', $parts);
+        // Eine Zeile je Rolle statt mit "·" aneinandergereiht — der native
+        // Meldungsdialog (Dietmars Screenshot 08.09.2026) macht aus einem
+        // langen, umbrechenden Fließtext sonst eine schwer lesbare Wand.
+        return implode("\n", $parts);
     }
 
     // Reine Existenzprüfung: Antwortet IRGENDETWAS auf dieser Unit-ID (auch

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.24.41-beta.1 (2026-09-08)
+
+- **🔧 Fix: „Schnittstellen prüfen"-Ergebnis war eine schwer lesbare, mit „·" aneinander-
+  gereihte Zeile** (Dietmars Screenshot des nativen Meldungsdialogs) — jetzt eine Zeile je
+  Rolle (Power Control/RPC/SCADA).
+
 ## 0.24.40-beta.1 (2026-09-08)
 
 - **🔧 Fix: Modellbezeichnung bei blue'Log-SCADA-Funden war fehlerhaft dekodiert.** Direkt aus
