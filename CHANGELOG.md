@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.24.45-beta.1 (2026-09-08)
+
+- **🔧 Fix: automatische blue'Log-Erkennung verwendete für SCADA/Power Control/RPC immer
+  denselben Port wie die klassische Zählersuche.** Dietmars Fund: „Standardmäßig wird mit
+  dem Port 502 gescannt, SCADA und Power Control/RPC haben aber andere Register." Bei ihm
+  liegen beide Ports zufällig gleich (502), aber der allgemeine Suchport (Feld „Modbus-TCP-
+  Port" im Panel „Suchbereich") und der blue'Log-eigene Port (Feld „Modbus-TCP-Port" im
+  Panel „blue'Log SCADA-Adressbereich") sind zwei unabhängige Einstellungen. „🔎 Netzwerk
+  durchsuchen" probiert bei einem Fehlschlag jetzt zusätzlich den separat konfigurierten
+  blue'Log-Port, falls er vom allgemeinen Suchport abweicht — keine zusätzlichen
+  Verbindungen im (vermutlich häufigsten) Fall, dass beide identisch sind. Erklärender Text
+  jetzt an beiden Feldern.
+- **🔧 Fix: sichtbarer Backslash in drei Hinweistexten** ("blue\\'Log" statt "blue'Log",
+  Dietmars Live-Screenshot) — Ursache war die immer wiederkehrende Anführungszeichen-Falle
+  dieses Repos: `\'` ist nur in einfach angeführten PHP-Strings eine gültige Escape-Sequenz,
+  in doppelt angeführten (nötig für ein eingebettetes „…" mit ASCII-Anführungszeichen als
+  Schließer) bleibt der Backslash wörtlich stehen. Auf einfache Anführungszeichen
+  umgestellt, wie im übrigen Repo üblich.
+
 ## 0.24.44-beta.1 (2026-09-08)
 
 - **🔧 Kritischer Fix: blue'Log-Erkennung fand in der Praxis NICHTS.** Direkt nach dem Ausliefern

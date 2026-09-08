@@ -117,7 +117,7 @@ class MeterHubDiscovery extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.24.44';
+    private const NEWS_VERSION = '0.24.45';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -156,6 +156,7 @@ class MeterHubDiscovery extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
+                ['type' => 'Label', 'caption' => '• 🔧 Fix: automatische blue\'Log-Erkennung verwendete für SCADA/Power Control/RPC immer denselben Port wie die klassische Zählersuche (Dietmars Fund: „Standardmäßig wird mit dem Port 502 gescannt, SCADA und Power Control/RPC haben aber andere Register"). Läuft ein blue\'Log auf einem abweichenden Port, probiert „🔎 Netzwerk durchsuchen" jetzt zusätzlich den im Panel „blue\'Log SCADA-Adressbereich" eingetragenen Port — beide Panels erklären das jetzt auch im Formulartext.'],
                 ['type' => 'Label', 'caption' => '• 🔧 Fix: blue\'Log-Erkennung fand in der Praxis KEINEN einzigen blue\'Log (Dietmars Live-Fund: 15 echte Geräte im Netz, null Treffer). Ursache laut Live-Messung: mehrere rasch aufeinanderfolgende Modbus-TCP-Verbindungen zum selben Gerät scheitern reihenweise, besonders bei parallel laufenden eigenen Regel-Skripten — jede Schnittstellen-Prüfung bekommt jetzt bis zu drei Versuche mit wachsender Pause. Reihenfolge zusätzlich an die reale Geräteflotte angepasst: SCADA zuerst (meist vorhanden), Power Control/RPC nur noch als Rückfall für Master-/EZA-Regler.'],
                 ['type' => 'Label', 'caption' => '• 🆕 „🔎 Netzwerk durchsuchen" erkennt Meteocontrol-blue\'Log-Datenlogger jetzt von sich aus — keine vorher bekannte IP mehr nötig. Bei einem Treffer wird automatisch der eingestellte SCADA-Adressbereich dahinter mitdurchsucht, dieselbe Fundliste wie bei klassischen Zählern.'],
                 ['type' => 'Label', 'caption' => '• 🆕 Neuer zweiter Suchmodus „blue\'Log SCADA-Adressbereich": statt eines IP-Bereichs EIN fest bekannter Meteocontrol-blue\'Log-Solarpark-Datenlogger, aber viele dahinter angeschlossene Geräte (Wechselrichter, Zähler …) über ihre eigene, am blue\'Log selbst frei vergebene SCADA-Adresse. Findet und schlägt jedes unterstützte Gerät als eigene MeterHub-Instanz vor — dieselbe Fundliste/„Erstellen"-Mechanik wie beim normalen Netzwerk-Suchlauf. Bleibt der schnellere, gezielte Weg, wenn die IP schon bekannt ist.'],
@@ -480,7 +481,7 @@ class MeterHubDiscovery extends IPSModule
                         ['type' => 'Label', 'caption' => '🔀 Neue Instanz kommt mit „Kommunikation aktiv" bereits eingeschaltet. Falls ein Umstieg von einem anderen Zähler-/Hub-Modul mit Übernahme der Messhistorie geplant ist: direkt nach dem Anlegen an der neuen MeterHub-Instanz wieder ausschalten, bis MigrationsHub die alte Historie übernommen hat — sonst überlappen sich die neu geloggten Werte mit der übertragenen Alt-Historie.'],
                         ['type' => 'Label', 'caption' => 'Die Suche prüft nur wenige dokumentierte Standard-Unit-IDs je Zähler, keinen vollen 1-247-Bereich — bei exotisch konfigurierter Unit-ID bitte die MeterHub-Instanz manuell anlegen.'],
                         ['type' => 'Label', 'caption' => 'Erkannt werden: Siemens PAC2200, Janitza UMG (klassisch + UMG 800), Shelly Pro 3EM, Carlo Gavazzi EM24/ET340, WhatWatt, Phoenix EEM-EM375 und Eastron SDM72D/SDM630. Beim Shelly Pro 3EM muss Modbus TCP am Gerät aktiviert sein. Zähler hinter RTU/TCP-Gateways mit frei wählbarer Unit-ID (z. B. Socomec, MBS) werden nicht automatisch gefunden — dort die Instanz manuell anlegen.'],
-                        ['type' => 'Label', 'caption' => "🆕 Ein Meteocontrol blue\'Log-Datenlogger wird von „🔎 Netzwerk durchsuchen\" jetzt von sich aus erkannt — keine vorher bekannte IP mehr nötig. Bei einem Treffer wird direkt der SCADA-Adressbereich dahinter mitdurchsucht (Einstellung im Panel „blue\'Log SCADA-Adressbereich\" unten). Das eigene Panel dort bleibt der schnellere, gezielte Weg, wenn die IP schon bekannt ist."],
+                        ['type' => 'Label', 'caption' => '🆕 Ein Meteocontrol blue\'Log-Datenlogger wird von „🔎 Netzwerk durchsuchen" jetzt von sich aus erkannt — keine vorher bekannte IP mehr nötig. Bei einem Treffer wird direkt der SCADA-Adressbereich dahinter mitdurchsucht (Einstellung im Panel „blue\'Log SCADA-Adressbereich" unten). Das eigene Panel dort bleibt der schnellere, gezielte Weg, wenn die IP schon bekannt ist.'],
                     ],
                 ],
                 [
@@ -491,6 +492,7 @@ class MeterHubDiscovery extends IPSModule
                         ['type' => 'ValidationTextBox', 'name' => 'RangeStart', 'caption' => 'Start-IP', 'validate' => '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$'],
                         ['type' => 'ValidationTextBox', 'name' => 'RangeEnd',   'caption' => 'End-IP',   'validate' => '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$'],
                         ['type' => 'NumberSpinner', 'name' => 'Port', 'caption' => 'Modbus-TCP-Port', 'minimum' => 1, 'maximum' => 65535],
+                        ['type' => 'Label', 'caption' => '💡 Gilt für klassische Zähler UND als erster Versuch für blue\'Log SCADA/Power Control/RPC. Läuft ein blue\'Log auf einem ANDEREN Port als die übrigen Zähler, dort den abweichenden Port im Feld „Modbus-TCP-Port" im Panel „blue\'Log SCADA-Adressbereich" unten eintragen — die Suche probiert dann automatisch beide Ports.'],
                         ['type' => 'ValidationTextBox', 'name' => 'IgnoreIPs', 'caption' => 'IPs ignorieren (Komma-getrennt)'],
                         ['type' => 'Label', 'caption' => 'Diese Adressen werden bei der Suche komplett übersprungen — z. B. andere Modbus-Geräte, die sonst fälschlich erscheinen würden.'],
                         [
@@ -499,7 +501,7 @@ class MeterHubDiscovery extends IPSModule
                                 'caption' => 'Was die Suche erkennt',
                                 'items' => [
                                     ['type' => 'Label', 'caption' => 'Erkannt werden: Siemens PAC2200, Janitza UMG (klassisch + UMG 800), Shelly Pro 3EM, Carlo Gavazzi EM24/ET340, WhatWatt, Phoenix EEM-EM375, Eastron SDM72D/SDM630 und der go-e Controller.'],
-                                    ['type' => 'Label', 'caption' => "🆕 Meteocontrol blue\'Log-Datenlogger werden zusätzlich automatisch erkannt (unabhängig vom Zähler-Suchlauf oben) — bei einem Treffer wird gleich der eingestellte SCADA-Adressbereich dahinter mitdurchsucht, ganz ohne die IP vorher zu kennen."],
+                                    ['type' => 'Label', 'caption' => '🆕 Meteocontrol blue\'Log-Datenlogger werden zusätzlich automatisch erkannt (unabhängig vom Zähler-Suchlauf oben) — bei einem Treffer wird gleich der eingestellte SCADA-Adressbereich dahinter mitdurchsucht, ganz ohne die IP vorher zu kennen.'],
                                     ['type' => 'Label', 'caption' => 'Die Suche prüft nur wenige dokumentierte Standard-Unit-IDs je Zähler, keinen vollen 1-247-Bereich — bei exotisch konfigurierter Unit-ID bitte die MeterHub-Instanz manuell anlegen.'],
                                     ['type' => 'Label', 'caption' => 'Zähler hinter RTU/TCP-Gateways mit frei wählbarer Unit-ID (z. B. Socomec, MBS) werden nicht automatisch gefunden — dort die Instanz ebenfalls manuell anlegen.'],
                                     ['type' => 'Label', 'caption' => 'Beim Shelly Pro 3EM muss Modbus TCP am Gerät erst aktiviert werden, sonst antwortet Port 502 gar nicht.'],
@@ -527,7 +529,7 @@ class MeterHubDiscovery extends IPSModule
                     'expanded' => false,
                     'items' => [
                         ['type' => 'Label', 'caption' => 'Für Meteocontrol-blue\'Log-Solarpark-Datenlogger: EIN fest bekannter blue\'Log, aber viele dahinter angeschlossene Geräte (Wechselrichter, Zähler …) — jedes über seine eigene, am blue\'Log selbst frei vergebene „SCADA-Adresse" erreichbar (Geräteliste am blue\'Log → Spalte „SCADA Adresse").'],
-                        ['type' => 'Label', 'caption' => "🆕 „🔎 Netzwerk durchsuchen\" oben findet einen blue\'Log inzwischen von selbst und durchsucht den hier eingestellten SCADA-Adressbereich automatisch mit. Dieses Panel bleibt der schnellere Weg, wenn die blue\'Log-IP schon bekannt ist und man nicht das ganze Netz absuchen möchte — der Adressbereich unten gilt für BEIDE Wege."],
+                        ['type' => 'Label', 'caption' => '🆕 „🔎 Netzwerk durchsuchen" oben findet einen blue\'Log inzwischen von selbst und durchsucht den hier eingestellten SCADA-Adressbereich automatisch mit. Dieses Panel bleibt der schnellere Weg, wenn die blue\'Log-IP schon bekannt ist und man nicht das ganze Netz absuchen möchte — der Adressbereich unten gilt für BEIDE Wege.'],
                         ['type' => 'Label', 'caption' => '⚠️ Die SCADA-Lizenz ist ein separates, kostenpflichtiges Zusatzmodul und wird in der Praxis selten verwendet — die Standard-Lizenz eines blue\'Log enthält weder SCADA noch RPC. Vor dem Adressbereich-Suchlauf lohnt sich ein Blick über „Schnittstellen prüfen" unten, ob SCADA an diesem blue\'Log überhaupt lizenziert ist.'],
                         [
                             'type' => 'Select', 'name' => 'BlueLogHostPreset',
@@ -537,6 +539,7 @@ class MeterHubDiscovery extends IPSModule
                         ],
                         ['type' => 'ValidationTextBox', 'name' => 'BlueLogHost', 'caption' => "blue'Log-IP-Adresse", 'validate' => '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$'],
                         ['type' => 'NumberSpinner', 'name' => 'BlueLogPort', 'caption' => 'Modbus-TCP-Port', 'minimum' => 1, 'maximum' => 65535],
+                        ['type' => 'Label', 'caption' => '🆕 Dieser Port gilt jetzt auch für „🔎 Netzwerk durchsuchen" oben — wird der blue\'Log dort nicht über den allgemeinen Suchport gefunden, probiert die Suche automatisch diesen hier eingetragenen Port zusätzlich.'],
                         ['type' => 'Button', 'name' => 'BtnCheckLicenses', 'caption' => '🔍  Schnittstellen dieser IP prüfen (Power Control/RPC/SCADA)', 'onClick' => 'echo MHUBD_CheckBlueLogLicenses($id, $BlueLogHost, $BlueLogPort);'],
                         ['type' => 'NumberSpinner', 'name' => 'ScadaAddrStart', 'caption' => 'SCADA-Adresse von', 'minimum' => 1, 'maximum' => 247],
                         ['type' => 'NumberSpinner', 'name' => 'ScadaAddrEnd',   'caption' => 'SCADA-Adresse bis',  'minimum' => 1, 'maximum' => 247],
@@ -688,6 +691,19 @@ class MeterHubDiscovery extends IPSModule
         $total   = count($openIps);
         $i       = 0;
         $aborted = $this->scanAborted();
+        // Dietmars Hinweis 08.09.2026: "Standardmäßig wird mit dem Port 502
+        // gescannt, SCADA und Power Control/RPC haben aber andere Register" —
+        // bei ihm liegen zufällig beide auf 502, aber der allgemeine
+        // Suchport (klassische Zähler) und der blue'Log-eigene Modbus-Port
+        // sind zwei unabhängige Einstellungen (siehe Panel "blue'Log
+        // SCADA-Adressbereich" unten, Feld "Modbus-TCP-Port"). Ein Treffer
+        // wird deshalb zuerst auf dem allgemeinen Suchport versucht (deckt
+        // den — vermutlich häufigsten — Fall ab, dass beide identisch sind,
+        // ohne zusätzliche Verbindungen), erst bei Fehlschlag UND falls
+        // beide Ports voneinander abweichen zusätzlich auf dem separat
+        // konfigurierten blue'Log-Port.
+        $blueLogPort = $this->ReadPropertyInteger('BlueLogPort');
+
         foreach ($openIps as $ip) {
             if ($this->scanAborted()) { $aborted = true; break; }
             $i++;
@@ -700,13 +716,19 @@ class MeterHubDiscovery extends IPSModule
             // Treffer gleich den SCADA-Adressbereich dahinter mitdurchsuchen,
             // statt nur die IP zu melden und einen zweiten manuellen Schritt
             // zu verlangen.
-            if ($this->identifyBlueLogHost($ip, $port)) {
+            $blueLogPortUsed = $port;
+            $isBlueLog = $this->identifyBlueLogHost($ip, $port);
+            if (!$isBlueLog && $blueLogPort !== $port) {
+                $isBlueLog = $this->identifyBlueLogHost($ip, $blueLogPort);
+                $blueLogPortUsed = $blueLogPort;
+            }
+            if ($isBlueLog) {
                 $blueLogsFound++;
                 foreach (range($scadaFrom, $scadaTo) as $addr) {
                     if ($this->scanAborted()) { $aborted = true; break 2; }
                     usleep(self::BLUELOG_CONN_PACING_US);
                     $this->ShowProgress("blue'Log $ip gefunden — SCADA-Adresse $addr …", (int)round(($i / max(1, $total)) * 100));
-                    $blueLogFound = $this->identifyBlueLogDevice($ip, $port, $addr);
+                    $blueLogFound = $this->identifyBlueLogDevice($ip, $blueLogPortUsed, $addr);
                     if ($blueLogFound !== null) {
                         $results[] = $blueLogFound;
                     }
