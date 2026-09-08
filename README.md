@@ -1,7 +1,7 @@
 # MeterHub
 
 ![Symcon](https://img.shields.io/badge/Symcon-PHPModul-blue)
-![Modul Version](https://img.shields.io/badge/Modul_Version-0.24.38--beta.1-blue)
+![Modul Version](https://img.shields.io/badge/Modul_Version-0.24.39--beta.1-blue)
 ![Symcon Version](https://img.shields.io/badge/Symcon_Version-9.0%2B-blue)
 ![License](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-lightgrey)
 [![Check Style](https://github.com/DG65/NRGMeterHub/actions/workflows/check-style.yml/badge.svg)](https://github.com/DG65/NRGMeterHub/actions/workflows/check-style.yml)
@@ -147,6 +147,12 @@ SCADA-Adressbereich eintragen, „blue'Log-Adressbereich durchsuchen" klicken �
 unterstützte Adresse (Wechselrichter/Zähler) erscheint in derselben Ergebnistabelle wie beim
 normalen Netzwerk-Suchlauf. Nicht unterstützte Gerätetypen (Sensor, Tracker, Genset, Batterie,
 Kraftwerksregler, das blue'Log selbst) werden gefunden, aber bewusst nicht vorgeschlagen.
+
+Die blue'Log-IP muss nicht jedes Mal neu gesucht werden — „Bekannten Host übernehmen" schlägt
+die Hosts bereits bestehender MeterHub-Instanzen vor. Vor dem eigentlichen Adressbereich-
+Suchlauf lohnt sich „Schnittstellen prüfen": eine SCADA-Lizenz ist ein teures Zusatzmodul und
+in der Praxis selten, die blue'Log-Standardlizenz enthält weder sie noch RPC — die Schaltfläche
+zeigt, welche der drei Rollen (Power Control/RPC/SCADA) an dieser IP überhaupt antworten.
 
 ## Funktionszuordnung (welcher Verbraucher hängt hier?)
 

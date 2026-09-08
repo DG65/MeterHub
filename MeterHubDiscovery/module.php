@@ -104,7 +104,7 @@ class MeterHubDiscovery extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.24.38';
+    private const NEWS_VERSION = '0.24.39';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -145,6 +145,9 @@ class MeterHubDiscovery extends IPSModule
             'items' => [
                 ['type' => 'Label', 'caption' => '• 🆕 Neuer zweiter Suchmodus „blue\'Log SCADA-Adressbereich": statt eines IP-Bereichs EIN fest bekannter Meteocontrol-blue\'Log-Solarpark-Datenlogger, aber viele dahinter angeschlossene Geräte (Wechselrichter, Zähler …) über ihre eigene, am blue\'Log selbst frei vergebene SCADA-Adresse. Findet und schlägt jedes unterstützte Gerät als eigene MeterHub-Instanz vor — dieselbe Fundliste/„Erstellen"-Mechanik wie beim normalen Netzwerk-Suchlauf.'],
                 ['type' => 'Label', 'caption' => '• 🆕 Neuer Platzhalter `{busaddr}` (RS485-Busadresse) für die „Namens-Vorlage" — nützlich, um viele gleichartige blue\'Log-Funde (z. B. 100 Wechselrichter) nach einem eigenen Muster statt einer reinen laufenden Nummer zu benennen.'],
+                ['type' => 'Label', 'caption' => '• 🆕 „Bekannten Host übernehmen" schlägt die blue\'Log-IP aus bereits bestehenden MeterHub-Instanzen vor — kein Umweg mehr über das Meteocontrol-VCOM-Portal, wenn die IP schon einmal verwendet wurde.'],
+                ['type' => 'Label', 'caption' => '• 🆕 „Schnittstellen prüfen" testet vorab, ob Power Control/RPC/SCADA an einer blue\'Log-IP überhaupt antworten — eine SCADA-Lizenz ist teuer und in der Praxis selten, die Standardlizenz hat weder sie noch RPC.'],
+                ['type' => 'Label', 'caption' => '• Fundliste im „Erstellen"-Panel ist jetzt breiter/höher (füllt den verfügbaren Platz), die Namens-Vorlage sitzt dort statt im Suchbereich-Panel, und die blue\'Log-Suche ist bei dünn besetzten Adressbereichen spürbar schneller.'],
                 ['type' => 'Label', 'caption' => '• 🔀 Migration von einer Alt-Instanz (anderes Modul, gleiche IP/Unit-ID): „Migration vorbereiten" verknüpft automatisch mit MigrationsHub — Simulieren/Ausführen bleiben dort bewusst manuelle Schritte. Details über das „?" beim Knopf.'],
                 ['type' => 'Label', 'caption' => '• Die Suche lässt sich jederzeit abbrechen („✖ Suche abbrechen"), die Kopfzeile zeigt live, wie viele Zähler bereits gefunden wurden.'],
                 ['type' => 'Label', 'caption' => '• Erkennt inzwischen neun Zählertypen: Siemens PAC2200, Janitza UMG (klassisch + UMG 800), Shelly Pro 3EM, Carlo Gavazzi EM24/ET340, WhatWatt, Phoenix EEM-EM375, Eastron SDM72D/SDM630, go-e Controller. Details über das „?" beim Suche-Knopf.'],
@@ -283,6 +286,77 @@ class MeterHubDiscovery extends IPSModule
         @$this->UpdateFormField('ScanProgress', 'indeterminate', true);
     }
 
+    /** Übernimmt einen gewählten bekannten Host in das Freitext-Feld "BlueLogHost". */
+    public function ApplyBlueLogHostPreset(string $preset)
+    {
+        if (trim($preset) !== '') {
+            $this->UpdateFormField('BlueLogHost', 'value', $preset);
+        }
+    }
+
+    /**
+     * Prüft, welche der drei blue'Log-Sollwert-/SCADA-Rollen an dieser IP
+     * überhaupt antworten — Dietmars berechtigter Einwand 08.09.2026: eine
+     * SCADA-Lizenz ist teuer und selten, die Standard-Lizenz hat weder sie
+     * noch RPC. Statt blind einen SCADA-Adressbereich zu konfigurieren, kann
+     * hier vorab geprüft werden, was überhaupt lizenziert/erreichbar ist.
+     * Reine Existenzprüfung (irgendeine Antwort, auch eine Modbus-Exception,
+     * zählt als "Unit vorhanden") — nicht, ob die gelesenen Werte plausibel
+     * sind (das leistet der eigentliche Suchlauf/Treiber danach).
+     */
+    public function CheckBlueLogLicenses(string $host, int $port): string
+    {
+        $host = trim($host);
+        if ($host === '') {
+            return "❌ Bitte zuerst die blue'Log-IP-Adresse eintragen.";
+        }
+        $roles = [
+            1  => 'Power Control (Netzbetreiber)',
+            10 => 'Remote Power Control / RPC (Direktvermarkter)',
+            97 => 'SCADA (alle Geräte)',
+        ];
+        $parts = [];
+        foreach ($roles as $unitId => $label) {
+            $ok = $this->probeUnitResponds($host, $port, $unitId, 1.0);
+            $parts[] = ($ok ? '✅ ' : '— ') . "$label (Slave-ID $unitId)";
+        }
+        return implode('  ·  ', $parts);
+    }
+
+    // Reine Existenzprüfung: Antwortet IRGENDETWAS auf dieser Unit-ID (auch
+    // eine Modbus-Exception zählt — die Adresse ist dann trotzdem belegt),
+    // im Unterschied zu modbusRead()/readHolding(), die eine Exception wie
+    // "keine Antwort" behandeln (für die eigentlichen Lesezugriffe richtig,
+    // für eine reine Vorhanden-Prüfung nicht).
+    private function probeUnitResponds($host, $port, $unitId, $timeout): bool
+    {
+        $sock = @fsockopen($host, $port, $errno, $errstr, $timeout);
+        if ($sock === false) {
+            return false;
+        }
+        stream_set_timeout($sock, $timeout);
+
+        $tid  = mt_rand(1, 65535);
+        $pdu  = pack('Cnn', 0x03, 0, 1);
+        $mbap = pack('nnn', $tid, 0, strlen($pdu) + 1) . chr($unitId);
+        fwrite($sock, $mbap . $pdu);
+
+        $response = '';
+        $deadline = microtime(true) + $timeout;
+        while (microtime(true) < $deadline) {
+            $chunk = @fread($sock, 512);
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+            $response .= $chunk;
+            if (strlen($response) >= 8) {
+                break; // MBAP(7) + Funktionscode(1) reicht zur Existenzprüfung
+            }
+        }
+        fclose($sock);
+        return strlen($response) >= 8;
+    }
+
     public function GetConfigurationForm()
     {
         $results = json_decode($this->ReadAttributeString('ResultsJSON'), true);
@@ -292,6 +366,25 @@ class MeterHubDiscovery extends IPSModule
 
         $existing = $this->findExistingInstances();
         $template = trim($this->ReadPropertyString('NameTemplate'));
+
+        // Vorschlagsliste für "blue'Log-IP-Adresse": aus bereits bestehenden
+        // MeterHub-Instanzen (Dietmars Einwand 08.09.2026 — die IP eines
+        // blue'Log erst über das Meteocontrol-VCOM-Portal/VPN suchen zu
+        // müssen, obwohl sie oft schon in einer eigenen Instanz steht).
+        // Gleiches Muster wie MeterHub::GetConfigurationForm() "Standort".
+        $blueLogHostOptions = [['caption' => '— bekannten Host wählen —', 'value' => '']];
+        $seenHosts = [];
+        foreach (IPS_GetInstanceListByModuleID(self::METERHUB_GUID) as $iid) {
+            $h = trim((string)@IPS_GetProperty($iid, 'Host'));
+            if ($h !== '' && !isset($seenHosts[$h])) {
+                $seenHosts[$h] = true;
+            }
+        }
+        $sortedHosts = array_keys($seenHosts);
+        sort($sortedHosts, SORT_NATURAL);
+        foreach ($sortedHosts as $h) {
+            $blueLogHostOptions[] = ['caption' => $h, 'value' => $h];
+        }
 
         $meterCounter = [];
         $values = [];
@@ -314,9 +407,15 @@ class MeterHubDiscovery extends IPSModule
             }
 
             $legacy = $this->LegacyCandidateFor($r['ip'], $r['unitId'], (int)($existing[$key] ?? 0));
+            // Blue'Log-Funde tragen ggf. einen ANDEREN Port als der normale
+            // IP-Bereichs-Suchlauf (eigenes Property BlueLogPort) — sonst
+            // würde eine abweichend konfigurierte Instanz mit dem falschen
+            // Port angelegt (Fund 08.09.2026, beim Ausbau des Erstellen-Panels
+            // aufgefallen).
+            $isBlueLogFind = in_array($r['meter'], self::BLUELOG_METER_MAP, true);
             $config = [
                 'Host'   => $r['ip'],
-                'Port'   => $this->ReadPropertyInteger('Port'),
+                'Port'   => $isBlueLogFind ? $this->ReadPropertyInteger('BlueLogPort') : $this->ReadPropertyInteger('Port'),
                 'UnitId' => $r['unitId'],
                 'Meter'  => $r['meter'],
             ];
@@ -367,8 +466,6 @@ class MeterHubDiscovery extends IPSModule
                         ['type' => 'ValidationTextBox', 'name' => 'RangeStart', 'caption' => 'Start-IP', 'validate' => '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$'],
                         ['type' => 'ValidationTextBox', 'name' => 'RangeEnd',   'caption' => 'End-IP',   'validate' => '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$'],
                         ['type' => 'NumberSpinner', 'name' => 'Port', 'caption' => 'Modbus-TCP-Port', 'minimum' => 1, 'maximum' => 65535],
-                        ['type' => 'ValidationTextBox', 'name' => 'NameTemplate', 'caption' => 'Name-Vorlage (leer = Zählertyp + lfd. Nr.)'],
-                        ['type' => 'Label', 'caption' => 'Platzhalter für die Vorlage: {zaehler} {ip} {unitid} {nr} {busaddr} — z. B. „{zaehler} Keller ({ip})". {busaddr} (RS485-Busadresse) ist nur bei Funden der blue\'Log-SCADA-Suche gefüllt, sonst leer.'],
                         ['type' => 'ValidationTextBox', 'name' => 'IgnoreIPs', 'caption' => 'IPs ignorieren (Komma-getrennt)'],
                         ['type' => 'Label', 'caption' => 'Diese Adressen werden bei der Suche komplett übersprungen — z. B. andere Modbus-Geräte, die sonst fälschlich erscheinen würden.'],
                         [
@@ -404,12 +501,20 @@ class MeterHubDiscovery extends IPSModule
                     'expanded' => false,
                     'items' => [
                         ['type' => 'Label', 'caption' => 'Für Meteocontrol-blue\'Log-Solarpark-Datenlogger: EIN fest bekannter blue\'Log, aber viele dahinter angeschlossene Geräte (Wechselrichter, Zähler …) — jedes über seine eigene, am blue\'Log selbst frei vergebene „SCADA-Adresse" erreichbar (Geräteliste am blue\'Log → Spalte „SCADA Adresse").'],
+                        ['type' => 'Label', 'caption' => '⚠️ Die SCADA-Lizenz ist ein separates, kostenpflichtiges Zusatzmodul und wird in der Praxis selten verwendet — die Standard-Lizenz eines blue\'Log enthält weder SCADA noch RPC. Vor dem Adressbereich-Suchlauf lohnt sich ein Blick über „Schnittstellen prüfen" unten, ob SCADA an diesem blue\'Log überhaupt lizenziert ist.'],
+                        [
+                            'type' => 'Select', 'name' => 'BlueLogHostPreset',
+                            'caption' => 'Bekannten Host übernehmen … (aus bestehenden MeterHub-Instanzen)',
+                            'options' => $blueLogHostOptions, 'value' => '',
+                            'onChange' => 'MHUBD_ApplyBlueLogHostPreset($id, $BlueLogHostPreset);',
+                        ],
                         ['type' => 'ValidationTextBox', 'name' => 'BlueLogHost', 'caption' => "blue'Log-IP-Adresse", 'validate' => '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$'],
                         ['type' => 'NumberSpinner', 'name' => 'BlueLogPort', 'caption' => 'Modbus-TCP-Port', 'minimum' => 1, 'maximum' => 65535],
+                        ['type' => 'Button', 'name' => 'BtnCheckLicenses', 'caption' => '🔍  Schnittstellen dieser IP prüfen (Power Control/RPC/SCADA)', 'onClick' => 'echo MHUBD_CheckBlueLogLicenses($id, $BlueLogHost, $BlueLogPort);'],
                         ['type' => 'NumberSpinner', 'name' => 'ScadaAddrStart', 'caption' => 'SCADA-Adresse von', 'minimum' => 1, 'maximum' => 247],
                         ['type' => 'NumberSpinner', 'name' => 'ScadaAddrEnd',   'caption' => 'SCADA-Adresse bis',  'minimum' => 1, 'maximum' => 247],
                         ['type' => 'Label', 'caption' => 'Adresse 97 ist üblicherweise das blue\'Log selbst (Summenwerte, hier nicht relevant) — der Bereich der angeschlossenen Einzelgeräte steht in derselben Spalte am blue\'Log, oft ab 100 aufwärts.'],
-                        ['type' => 'Label', 'caption' => '💡 Eigene Namen statt „Wechselrichter (Modell) 1, 2, 3 …": die „Namens-Vorlage" oben im Panel „🔎 Suchbereich" gilt für BEIDE Suchmodi — z. B. „WR SCADA {unitid}" oder „WR Bus {busaddr}" (Busadresse = Spalte „Adresse" in der blue\'Log-Geräteliste).'],
+                        ['type' => 'Label', 'caption' => '💡 Eigene Namen statt „Wechselrichter (Modell) 1, 2, 3 …": die „Namens-Vorlage" im Panel „🛠️ Erstellen" unten gilt für BEIDE Suchmodi — z. B. „WR SCADA {unitid}" oder „WR Bus {busaddr}" (Busadresse = Spalte „Adresse" in der blue\'Log-Geräteliste).'],
                         ['type' => 'Button', 'name' => 'BtnScanBlueLog',  'caption' => "🔎  blue'Log-Adressbereich durchsuchen", 'onClick' => 'MHUBD_DiscoverBlueLog($id);'],
                         ['type' => 'Button', 'name' => 'BtnAbortBlueLog', 'caption' => '✖  Suche abbrechen', 'onClick' => 'MHUBD_AbortScan($id);', 'visible' => false],
                     ],
@@ -419,15 +524,29 @@ class MeterHubDiscovery extends IPSModule
                     'caption' => '🛠️  Erstellen',
                     'expanded' => true,
                     'items' => [
+                        // Namens-Vorlage steht hier, nicht bei den Suchbereichen — sie hat
+                        // nichts mit dem Suchen/Filtern zu tun, sondern nur mit dem
+                        // "Erstellen"-Schritt (Dietmars Einwand 08.09.2026: "die Benennung
+                        // hat eigentlich nichts mit der Suche zu tun"). Gilt für Funde BEIDER
+                        // Suchmodi (IP-Bereich UND blue'Log-SCADA-Adressbereich).
+                        ['type' => 'ValidationTextBox', 'name' => 'NameTemplate', 'caption' => 'Name-Vorlage (leer = Zählertyp + lfd. Nr.)'],
+                        ['type' => 'Label', 'caption' => 'Platzhalter für die Vorlage: {zaehler} {ip} {unitid} {nr} {busaddr} — z. B. „{zaehler} Keller ({ip})". {busaddr} (RS485-Busadresse) ist nur bei Funden der blue\'Log-SCADA-Suche gefüllt, sonst leer.'],
                         [
                             'type'     => 'Configurator',
                             'name'     => 'DiscoveryList',
                             'caption'  => 'Gefundene Zähler',
-                            'rowCount' => 6,
+                            // 0 = füllt den verbleibenden Platz (laut SDK-Doku), statt einer
+                            // festen Zeilenzahl — bei einem blue'Log-SCADA-Suchlauf mit
+                            // vielen Treffern (z. B. 48 Wechselrichter) sonst zu niedrig.
+                            'rowCount' => 0,
                             'delete'   => false,
                             'sort'     => ['column' => 'ip', 'direction' => 'ascending'],
                             'columns'  => [
-                                ['caption' => 'Zählertyp',    'name' => 'meter',  'width' => '220px'],
+                                // "auto" darf laut SDK-Doku genau EINE Spalte tragen — hier die
+                                // mit den längsten Texten (blue'Log-Funde tragen die
+                                // Modellbezeichnung im Zählertyp-Text, z. B. "Wechselrichter
+                                // (M3L-KT360-00N2SU)").
+                                ['caption' => 'Zählertyp',    'name' => 'meter',  'width' => 'auto'],
                                 ['caption' => 'IP-Adresse',   'name' => 'ip',     'width' => '150px'],
                                 ['caption' => 'Unit ID',      'name' => 'unitId', 'width' => '100px'],
                                 ['caption' => 'Alt-Instanz gefunden (MigrationsHub)', 'name' => 'legacy', 'width' => '280px',
@@ -639,7 +758,13 @@ class MeterHubDiscovery extends IPSModule
      */
     private function identifyBlueLogDevice($host, $port, $unitId)
     {
-        $type = $this->readU16Holding($host, $port, $unitId, 40000, 1.0);
+        // Kürzerer Zeitlimit für die reine Existenzprüfung: bei einem vollen
+        // 1-247-Adressbereich sind die meisten Adressen unbelegt (Dietmars
+        // Fund 08.09.2026) — jede davon würde sonst mit vollen 1,0 s
+        // Zeitüberschreitung den Suchlauf spürbar verlangsamen. Ein bereits
+        // konfiguriertes Gerät antwortet auf demselben lokalen Netz deutlich
+        // schneller; unbelegte Funde landen ohnehin nie im Ergebnis.
+        $type = $this->readU16Holding($host, $port, $unitId, 40000, 0.5);
         if ($type === null || !isset(self::BLUELOG_METER_MAP[$type])) {
             return null;
         }

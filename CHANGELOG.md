@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.24.39-beta.1 (2026-09-08)
+
+- **Praxis-Feinschliff am „Erstellen"-Panel und der blue'Log-Suche**, alles direkt am Live-Fund
+  (Screenshot der ersten echten SCADA-Suche) gefunden und live gegengeprüft:
+  - **Fundliste breiter/höher**: Spalte „Zählertyp" auf `width: 'auto'` (füllt den
+    verbleibenden Platz — laut SDK-Doku darf genau eine Spalte das), `rowCount: 0` (füllt
+    laut SDK-Doku den verfügbaren Platz statt fester 6 Zeilen) — bei vielen blue'Log-Funden
+    (z. B. 48 Wechselrichtern) vorher zu schmal und zu niedrig.
+  - **Namens-Vorlage ins „🛠️ Erstellen"-Panel verschoben** (aus „🔎 Suchbereich") — Dietmars
+    berechtigter Einwand: Benennung hat nichts mit Suchen/Filtern zu tun, sondern mit dem
+    Erstellen-Schritt. Gilt weiterhin für beide Suchmodi.
+  - **Schnellere Suche bei dünn besetztem Adressbereich**: Zeitlimit der reinen
+    Existenzprüfung je SCADA-Adresse von 1,0 s auf 0,5 s halbiert — unbelegte Adressen
+    landeten schon vorher nie im Ergebnis (Rückfrage geklärt, kein Anzeigefehler), aber ihre
+    Zeitüberschreitung dominierte bei einem vollen 1-247-Bereich die Suchdauer. Live
+    verifiziert: eine unbelegte Adresse braucht am Solarpark ca. 1,0–1,02 s bis zur
+    Zeitüberschreitung, real also fast exakte Halbierung.
+  - **🔧 Fix**: blue'Log-Funde bekamen bisher den Port des allgemeinen IP-Suchlaufs
+    (Property `Port`) statt des separaten `BlueLogPort` — bei abweichendem Port wäre die
+    neue Instanz mit dem falschen Wert angelegt worden.
+  - **🆕 „Bekannten Host übernehmen"**: Auswahlliste für „blue'Log-IP-Adresse" aus den
+    Host-Werten bereits bestehender MeterHub-Instanzen — Dietmars Einwand: die IP sonst
+    erst über das Meteocontrol-VCOM-Portal + VPN + Login heraussuchen zu müssen, obwohl sie
+    oft schon in einer eigenen Instanz steht.
+  - **🆕 „Schnittstellen prüfen"**: neue Schaltfläche prüft Slave-ID 1 (Power Control), 10
+    (RPC) und 97 (SCADA) auf reine Erreichbarkeit, bevor ein Adressbereich konfiguriert
+    wird. Hintergrund (Dietmars Hinweis): die SCADA-Lizenz ist ein teures Zusatzmodul und in
+    der Praxis selten — die blue'Log-Standardlizenz enthält weder sie noch RPC. Live an
+    Dietmars Solarpark verifiziert: beide NAP-„MASTER"-blue'Logs antworten auf allen drei
+    Rollen, der Feld-Datenlogger (SP Hohberg) dagegen nur auf SCADA — Power Control/RPC
+    laufen dort korrekt in die Zeitüberschreitung.
+
 ## 0.24.38-beta.1 (2026-09-08)
 
 - **Eigene Namen für blue'Log-SCADA-Funde: neuer Platzhalter `{busaddr}`.** Dietmars Fund nach
