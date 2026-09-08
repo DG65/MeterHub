@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.24.42-beta.1 (2026-09-08)
+
+- **🔧 Fix: „Schnittstellen prüfen"-Zeilen weiter verbessert** (Dietmars zweiter Screenshot): die
+  RPC-Zeile war zu lang und brach im nativen Meldungsdialog um — gekürzt auf „RPC
+  (Direktvermarkter)" statt ausgeschriebenem „Remote Power Control / RPC (Direktvermarkter)".
+  Nicht-erreichbar wird jetzt mit ❌ markiert statt mit „—" — eindeutiges Gegenteil von ✅, statt
+  eines Zeichens, das sich nicht klar als „nicht erreichbar" liest.
+
 ## 0.24.41-beta.1 (2026-09-08)
 
 - **🔧 Fix: „Schnittstellen prüfen"-Ergebnis war eine schwer lesbare, mit „·" aneinander-

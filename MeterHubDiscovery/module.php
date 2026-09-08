@@ -311,15 +311,20 @@ class MeterHubDiscovery extends IPSModule
         if ($host === '') {
             return "❌ Bitte zuerst die blue'Log-IP-Adresse eintragen.";
         }
+        // Kurz genug, damit jede Zeile im nativen Meldungsdialog ohne Umbruch
+        // passt (Dietmars Screenshot 08.09.2026: "RPC" statt ausgeschriebenem
+        // "Remote Power Control / RPC" reicht — die Klammer erklärt die Rolle).
         $roles = [
             1  => 'Power Control (Netzbetreiber)',
-            10 => 'Remote Power Control / RPC (Direktvermarkter)',
+            10 => 'RPC (Direktvermarkter)',
             97 => 'SCADA (alle Geräte)',
         ];
         $parts = [];
         foreach ($roles as $unitId => $label) {
             $ok = $this->probeUnitResponds($host, $port, $unitId, 1.0);
-            $parts[] = ($ok ? '✅ ' : '— ') . "$label (Slave-ID $unitId)";
+            // ❌ statt "—" — eindeutiges Gegenteil zu ✅ (Dietmars Einwand:
+            // "—" liest sich nicht klar als "nicht erreichbar").
+            $parts[] = ($ok ? '✅ ' : '❌ ') . "$label (Slave-ID $unitId)";
         }
         // Eine Zeile je Rolle statt mit "·" aneinandergereiht — der native
         // Meldungsdialog (Dietmars Screenshot 08.09.2026) macht aus einem
