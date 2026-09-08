@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.24.43-beta.1 (2026-09-08)
+
+- **🔧 Konstruktionsfehler behoben: „🔎 Netzwerk durchsuchen" fand blue'Logs nicht.** Dietmars
+  scharfe Rückmeldung nach dem ersten Praxistest des SCADA-Suchmodus: „wenn ich Zähler im
+  Netzwerk suchen lasse, dann möchte ich vielleicht auch die blue'Logs angezeigt bekommen …
+  ich weiss auch genau was ich von der Qualität Deines Scans halten soll - NIX." Der normale
+  IP-Bereichs-Suchlauf erkennt jetzt selbst, ob an einer offenen IP ein Meteocontrol-blue'Log
+  antwortet (Register 40000 über Unit-ID 97 == 0, „Datenlogger"), und durchsucht bei einem
+  Treffer automatisch den eingestellten SCADA-Adressbereich dahinter mit — ohne dass die
+  blue'Log-IP vorher händisch bekannt sein muss. Das bisherige eigene Panel „blue'Log
+  SCADA-Adressbereich" bleibt als schnellerer, gezielter Weg bestehen, wenn die IP bereits
+  bekannt ist.
+- Dokumentations-/Hinweistexte (Doku-Panel, „Welche Zähler findet die Suche"-Popup, blue'Log-
+  Panel-Einleitung) entsprechend aktualisiert.
+
 ## 0.24.42-beta.1 (2026-09-08)
 
 - **🔧 Fix: „Schnittstellen prüfen"-Zeilen weiter verbessert** (Dietmars zweiter Screenshot): die
