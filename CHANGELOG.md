@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.24.40-beta.1 (2026-09-08)
+
+- **🔧 Fix: Modellbezeichnung bei blue'Log-SCADA-Funden war fehlerhaft dekodiert.** Direkt aus
+  Dietmars Screenshot der ersten echten Mehrfach-Suche gefunden (Zählertyp zeigte
+  „Wechselrichter () 2en(GC IE0- 2TL 3AE)" statt eines lesbaren Modellnamens). Root Cause live
+  verifiziert: Bei diesen Geräten (ByteOrder 3) ist bei mehrregistrigen Strings nicht nur
+  paarweise wie bei Float32 (CDAB) vertauscht, sondern die GESAMTE Registerreihenfolge
+  umgekehrt — das letzte Register trägt die ersten Zeichen. `readAscii()` liest die Register
+  jetzt rückwärts und schneidet am ersten Null-Byte ab (statt nur rechts zu trimmen, falls
+  Alt-Bytes eines vorher längeren Namens dahinterstehen). Nebenbei aufgefallen: die vorherige,
+  scheinbar korrekte erste Verifikation dieser Funktion zeigte ebenfalls einen falschen, nur
+  zufällig plausibel aussehenden Modellnamen — jetzt an vier verschiedenen Geräten zweier
+  Kombiner-Boxen sauber gegengeprüft ("AE 3TL 20-IEC (Gen 2)", "SUN2000-36KTL-M3").
+- **Fundliste im „Erstellen"-Panel höher**: `rowCount: 0` ("füllt den verbleibenden Platz" laut
+  SDK-Doku) zeigte sich in der Praxis nicht wie erhofft (Dietmars Live-Screenshot) — durch
+  einen festen, großzügigen Wert (15) ersetzt, der zuverlässig mehr Zeilen zeigt.
+
 ## 0.24.39-beta.1 (2026-09-08)
 
 - **Praxis-Feinschliff am „Erstellen"-Panel und der blue'Log-Suche**, alles direkt am Live-Fund

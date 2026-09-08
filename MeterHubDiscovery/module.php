@@ -104,7 +104,7 @@ class MeterHubDiscovery extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.24.39';
+    private const NEWS_VERSION = '0.24.40';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -147,7 +147,8 @@ class MeterHubDiscovery extends IPSModule
                 ['type' => 'Label', 'caption' => '• 🆕 Neuer Platzhalter `{busaddr}` (RS485-Busadresse) für die „Namens-Vorlage" — nützlich, um viele gleichartige blue\'Log-Funde (z. B. 100 Wechselrichter) nach einem eigenen Muster statt einer reinen laufenden Nummer zu benennen.'],
                 ['type' => 'Label', 'caption' => '• 🆕 „Bekannten Host übernehmen" schlägt die blue\'Log-IP aus bereits bestehenden MeterHub-Instanzen vor — kein Umweg mehr über das Meteocontrol-VCOM-Portal, wenn die IP schon einmal verwendet wurde.'],
                 ['type' => 'Label', 'caption' => '• 🆕 „Schnittstellen prüfen" testet vorab, ob Power Control/RPC/SCADA an einer blue\'Log-IP überhaupt antworten — eine SCADA-Lizenz ist teuer und in der Praxis selten, die Standardlizenz hat weder sie noch RPC.'],
-                ['type' => 'Label', 'caption' => '• Fundliste im „Erstellen"-Panel ist jetzt breiter/höher (füllt den verfügbaren Platz), die Namens-Vorlage sitzt dort statt im Suchbereich-Panel, und die blue\'Log-Suche ist bei dünn besetzten Adressbereichen spürbar schneller.'],
+                ['type' => 'Label', 'caption' => '• Fundliste im „Erstellen"-Panel ist jetzt breiter/höher, die Namens-Vorlage sitzt dort statt im Suchbereich-Panel, und die blue\'Log-Suche ist bei dünn besetzten Adressbereichen spürbar schneller.'],
+                ['type' => 'Label', 'caption' => '• 🔧 Fix: Die Modellbezeichnung bei blue\'Log-SCADA-Funden war fehlerhaft dekodiert (zeigte Zeichensalat statt eines lesbaren Namens) — jetzt an mehreren echten Geräten geprüft.'],
                 ['type' => 'Label', 'caption' => '• 🔀 Migration von einer Alt-Instanz (anderes Modul, gleiche IP/Unit-ID): „Migration vorbereiten" verknüpft automatisch mit MigrationsHub — Simulieren/Ausführen bleiben dort bewusst manuelle Schritte. Details über das „?" beim Knopf.'],
                 ['type' => 'Label', 'caption' => '• Die Suche lässt sich jederzeit abbrechen („✖ Suche abbrechen"), die Kopfzeile zeigt live, wie viele Zähler bereits gefunden wurden.'],
                 ['type' => 'Label', 'caption' => '• Erkennt inzwischen neun Zählertypen: Siemens PAC2200, Janitza UMG (klassisch + UMG 800), Shelly Pro 3EM, Carlo Gavazzi EM24/ET340, WhatWatt, Phoenix EEM-EM375, Eastron SDM72D/SDM630, go-e Controller. Details über das „?" beim Suche-Knopf.'],
@@ -535,10 +536,12 @@ class MeterHubDiscovery extends IPSModule
                             'type'     => 'Configurator',
                             'name'     => 'DiscoveryList',
                             'caption'  => 'Gefundene Zähler',
-                            // 0 = füllt den verbleibenden Platz (laut SDK-Doku), statt einer
-                            // festen Zeilenzahl — bei einem blue'Log-SCADA-Suchlauf mit
-                            // vielen Treffern (z. B. 48 Wechselrichter) sonst zu niedrig.
-                            'rowCount' => 0,
+                            // Laut SDK-Doku würde 0 "den verbleibenden Platz füllen" — live
+                            // getestet (Dietmars Screenshot 08.09.2026) blieb die Tabelle in der
+                            // Konsole trotzdem klein, wenn nur wenige Treffer da sind. Fester,
+                            // großzügiger Wert ist daher verlässlicher als die dokumentierte
+                            // Auto-Höhe, die sich in der Praxis nicht wie erwartet zeigte.
+                            'rowCount' => 15,
                             'delete'   => false,
                             'sort'     => ['column' => 'ip', 'direction' => 'ascending'],
                             'columns'  => [
@@ -798,12 +801,23 @@ class MeterHubDiscovery extends IPSModule
         if ($regs === null) {
             return null;
         }
+        // Bei diesen Geräten (ByteOrder 3) ist bei mehrregistrigen Strings
+        // nicht nur paarweise wie bei Float32 (CDAB) vertauscht, sondern die
+        // GESAMTE Registerreihenfolge umgekehrt — das letzte Register trägt
+        // die ERSTEN Zeichen. Live verifiziert (08.09.2026, Rohbytes eines
+        // echten Modell-Strings direkt am Solarpark): erst nach Umkehr der
+        // Registerreihenfolge ergab sich "AE 3TL 20-IEC (Gen 2)" statt der
+        // vorher rückwärts/rechtsbündig im Feld stehenden Zeichen.
         $bytes = '';
-        for ($i = 0; $i < $regCount; $i++) {
+        for ($i = $regCount - 1; $i >= 0; $i--) {
             $v = $regs[$i] ?? 0;
             $bytes .= chr(($v >> 8) & 0xFF) . chr($v & 0xFF);
         }
-        return rtrim($bytes, "\x00");
+        // Am ersten 0x00 abschneiden statt nur rechts zu trimmen — falls ein
+        // kürzerer Name einen längeren überschrieben hat, könnten hinter dem
+        // eigentlichen Null-Terminator noch Alt-Bytes stehen.
+        $nullPos = strpos($bytes, "\x00");
+        return trim($nullPos === false ? $bytes : substr($bytes, 0, $nullPos));
     }
 
     private function findExistingInstances()
