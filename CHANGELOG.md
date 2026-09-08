@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.24.38-beta.1 (2026-09-08)
+
+- **Eigene Namen für blue'Log-SCADA-Funde: neuer Platzhalter `{busaddr}`.** Dietmars Fund nach
+  dem ersten erfolgreichen Suchlauf ("die WR werden perfekt gefunden, aber wie benenne ich sie
+  im Formular?") — die bestehende „Namens-Vorlage" (Platzhalter `{zaehler} {ip} {unitid} {nr}`)
+  war schon immer für beide Suchmodi gültig, aber nirgends darauf hingewiesen. Zusätzlich neuer
+  Platzhalter `{busaddr}` — liest die RS485-Busadresse (Register 40113, entspricht der Spalte
+  „Adresse" in der blue'Log-Geräteliste) direkt beim Suchlauf mit aus; live an Dietmars
+  Solarpark verifiziert (sequenzielle Werte 22-26 für die SCADA-Adressen 172-176). Neue
+  Hinweiszeile direkt im blue'Log-Panel verweist auf das Namens-Vorlage-Feld, statt dass es nur
+  in einem anderen Panel dokumentiert bleibt.
+
 ## 0.24.37-beta.1 (2026-09-07)
 
 - **Erster Schreibzugriff in MeterHub: blue'Log RPC/Power Control.** Universeller Treiber,

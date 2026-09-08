@@ -104,7 +104,7 @@ class MeterHubDiscovery extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.24.36';
+    private const NEWS_VERSION = '0.24.38';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -144,6 +144,7 @@ class MeterHubDiscovery extends IPSModule
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
                 ['type' => 'Label', 'caption' => '• 🆕 Neuer zweiter Suchmodus „blue\'Log SCADA-Adressbereich": statt eines IP-Bereichs EIN fest bekannter Meteocontrol-blue\'Log-Solarpark-Datenlogger, aber viele dahinter angeschlossene Geräte (Wechselrichter, Zähler …) über ihre eigene, am blue\'Log selbst frei vergebene SCADA-Adresse. Findet und schlägt jedes unterstützte Gerät als eigene MeterHub-Instanz vor — dieselbe Fundliste/„Erstellen"-Mechanik wie beim normalen Netzwerk-Suchlauf.'],
+                ['type' => 'Label', 'caption' => '• 🆕 Neuer Platzhalter `{busaddr}` (RS485-Busadresse) für die „Namens-Vorlage" — nützlich, um viele gleichartige blue\'Log-Funde (z. B. 100 Wechselrichter) nach einem eigenen Muster statt einer reinen laufenden Nummer zu benennen.'],
                 ['type' => 'Label', 'caption' => '• 🔀 Migration von einer Alt-Instanz (anderes Modul, gleiche IP/Unit-ID): „Migration vorbereiten" verknüpft automatisch mit MigrationsHub — Simulieren/Ausführen bleiben dort bewusst manuelle Schritte. Details über das „?" beim Knopf.'],
                 ['type' => 'Label', 'caption' => '• Die Suche lässt sich jederzeit abbrechen („✖ Suche abbrechen"), die Kopfzeile zeigt live, wie viele Zähler bereits gefunden wurden.'],
                 ['type' => 'Label', 'caption' => '• Erkennt inzwischen neun Zählertypen: Siemens PAC2200, Janitza UMG (klassisch + UMG 800), Shelly Pro 3EM, Carlo Gavazzi EM24/ET340, WhatWatt, Phoenix EEM-EM375, Eastron SDM72D/SDM630, go-e Controller. Details über das „?" beim Suche-Knopf.'],
@@ -300,9 +301,12 @@ class MeterHubDiscovery extends IPSModule
             $nr = $meterCounter[$r['meter']];
 
             if ($template !== '') {
+                // {busaddr} nur bei Funden der blue'Log-SCADA-Suche gefüllt
+                // (RS485-Busadresse, Register 40113) — beim normalen IP-Suchlauf
+                // leer, damit ein Muster mit {busaddr} dort nicht fehlschlägt.
                 $instanceName = str_replace(
-                    ['{zaehler}', '{ip}', '{unitid}', '{nr}'],
-                    [$r['label'], $r['ip'], $r['unitId'], $nr],
+                    ['{zaehler}', '{ip}', '{unitid}', '{nr}', '{busaddr}'],
+                    [$r['label'], $r['ip'], $r['unitId'], $nr, $r['busAddr'] ?? ''],
                     $template
                 );
             } else {
@@ -364,7 +368,7 @@ class MeterHubDiscovery extends IPSModule
                         ['type' => 'ValidationTextBox', 'name' => 'RangeEnd',   'caption' => 'End-IP',   'validate' => '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$'],
                         ['type' => 'NumberSpinner', 'name' => 'Port', 'caption' => 'Modbus-TCP-Port', 'minimum' => 1, 'maximum' => 65535],
                         ['type' => 'ValidationTextBox', 'name' => 'NameTemplate', 'caption' => 'Name-Vorlage (leer = Zählertyp + lfd. Nr.)'],
-                        ['type' => 'Label', 'caption' => 'Platzhalter für die Vorlage: {zaehler} {ip} {unitid} {nr} — z. B. „{zaehler} Keller ({ip})"'],
+                        ['type' => 'Label', 'caption' => 'Platzhalter für die Vorlage: {zaehler} {ip} {unitid} {nr} {busaddr} — z. B. „{zaehler} Keller ({ip})". {busaddr} (RS485-Busadresse) ist nur bei Funden der blue\'Log-SCADA-Suche gefüllt, sonst leer.'],
                         ['type' => 'ValidationTextBox', 'name' => 'IgnoreIPs', 'caption' => 'IPs ignorieren (Komma-getrennt)'],
                         ['type' => 'Label', 'caption' => 'Diese Adressen werden bei der Suche komplett übersprungen — z. B. andere Modbus-Geräte, die sonst fälschlich erscheinen würden.'],
                         [
@@ -405,6 +409,7 @@ class MeterHubDiscovery extends IPSModule
                         ['type' => 'NumberSpinner', 'name' => 'ScadaAddrStart', 'caption' => 'SCADA-Adresse von', 'minimum' => 1, 'maximum' => 247],
                         ['type' => 'NumberSpinner', 'name' => 'ScadaAddrEnd',   'caption' => 'SCADA-Adresse bis',  'minimum' => 1, 'maximum' => 247],
                         ['type' => 'Label', 'caption' => 'Adresse 97 ist üblicherweise das blue\'Log selbst (Summenwerte, hier nicht relevant) — der Bereich der angeschlossenen Einzelgeräte steht in derselben Spalte am blue\'Log, oft ab 100 aufwärts.'],
+                        ['type' => 'Label', 'caption' => '💡 Eigene Namen statt „Wechselrichter (Modell) 1, 2, 3 …": die „Namens-Vorlage" oben im Panel „🔎 Suchbereich" gilt für BEIDE Suchmodi — z. B. „WR SCADA {unitid}" oder „WR Bus {busaddr}" (Busadresse = Spalte „Adresse" in der blue\'Log-Geräteliste).'],
                         ['type' => 'Button', 'name' => 'BtnScanBlueLog',  'caption' => "🔎  blue'Log-Adressbereich durchsuchen", 'onClick' => 'MHUBD_DiscoverBlueLog($id);'],
                         ['type' => 'Button', 'name' => 'BtnAbortBlueLog', 'caption' => '✖  Suche abbrechen', 'onClick' => 'MHUBD_AbortScan($id);', 'visible' => false],
                     ],
@@ -638,13 +643,15 @@ class MeterHubDiscovery extends IPSModule
         if ($type === null || !isset(self::BLUELOG_METER_MAP[$type])) {
             return null;
         }
-        $model = trim((string)$this->readAscii($host, $port, $unitId, 40033, 32, 1.5));
-        $label = self::BLUELOG_TYPE_LABELS[$type] . ($model !== '' ? " ($model)" : '');
+        $model   = trim((string)$this->readAscii($host, $port, $unitId, 40033, 32, 1.5));
+        $busAddr = $this->readU16Holding($host, $port, $unitId, 40113, 1.0); // RS485-Busadresse, siehe blue'Log-Geräteliste Spalte "Adresse"
+        $label   = self::BLUELOG_TYPE_LABELS[$type] . ($model !== '' ? " ($model)" : '');
         return [
-            'ip'     => $host,
-            'unitId' => $unitId,
-            'meter'  => self::BLUELOG_METER_MAP[$type],
-            'label'  => $label,
+            'ip'      => $host,
+            'unitId'  => $unitId,
+            'meter'   => self::BLUELOG_METER_MAP[$type],
+            'label'   => $label,
+            'busAddr' => $busAddr, // nur von der blue'Log-Suche gefüllt, sonst null
         ];
     }
 
