@@ -117,7 +117,7 @@ class MeterHubDiscovery extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.24.45';
+    private const NEWS_VERSION = '0.24.46';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -156,6 +156,7 @@ class MeterHubDiscovery extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
+                ['type' => 'Label', 'caption' => '• 🔧 Fix: blue\'Log-Erkennung stützte sich allein auf die Selbstauskunft des Geräts (Slave 97) — genau die dürfte während einer aktiven Regelung durch den Direktvermarkter am ehesten belegt sein (Dietmars Hinweis: „vielleicht solltest Du auch mal die Geräte-IDs in dieses Spiel mit einplanen"). Zusätzlich zu 97 zählen jetzt zwei Geräte-IDs aus dem konfigurierten SCADA-Bereich (Anfang und Mitte) gleichwertig als Nachweis — die angeschlossenen Einzelgeräte werden unabhängig von der Selbstauskunft bedient und antworten oft, wenn diese gerade beschäftigt ist.'],
                 ['type' => 'Label', 'caption' => '• 🔧 Fix: automatische blue\'Log-Erkennung verwendete für SCADA/Power Control/RPC immer denselben Port wie die klassische Zählersuche (Dietmars Fund: „Standardmäßig wird mit dem Port 502 gescannt, SCADA und Power Control/RPC haben aber andere Register"). Läuft ein blue\'Log auf einem abweichenden Port, probiert „🔎 Netzwerk durchsuchen" jetzt zusätzlich den im Panel „blue\'Log SCADA-Adressbereich" eingetragenen Port — beide Panels erklären das jetzt auch im Formulartext.'],
                 ['type' => 'Label', 'caption' => '• 🔧 Fix: blue\'Log-Erkennung fand in der Praxis KEINEN einzigen blue\'Log (Dietmars Live-Fund: 15 echte Geräte im Netz, null Treffer). Ursache laut Live-Messung: mehrere rasch aufeinanderfolgende Modbus-TCP-Verbindungen zum selben Gerät scheitern reihenweise, besonders bei parallel laufenden eigenen Regel-Skripten — jede Schnittstellen-Prüfung bekommt jetzt bis zu drei Versuche mit wachsender Pause. Reihenfolge zusätzlich an die reale Geräteflotte angepasst: SCADA zuerst (meist vorhanden), Power Control/RPC nur noch als Rückfall für Master-/EZA-Regler.'],
                 ['type' => 'Label', 'caption' => '• 🆕 „🔎 Netzwerk durchsuchen" erkennt Meteocontrol-blue\'Log-Datenlogger jetzt von sich aus — keine vorher bekannte IP mehr nötig. Bei einem Treffer wird automatisch der eingestellte SCADA-Adressbereich dahinter mitdurchsucht, dieselbe Fundliste wie bei klassischen Zählern.'],
@@ -860,13 +861,40 @@ class MeterHubDiscovery extends IPSModule
      * Schnittstelle bekommt deshalb bis zu zwei Versuche mit steigendem
      * Abstand (`probeBlueLogInterface()`), statt nach einem einzigen
      * Fehlversuch sofort zur nächsten Schnittstelle zu wechseln.
+     *
+     * VIERTE KORREKTUR, 09.09.2026 (Dietmars Hinweis: "vielleicht solltest
+     * Du auch mal die Geräte-IDs in dieses Spiel mit einplanen"): Ein
+     * echter Suchlauf über die Instanz fand trotz aller obigen Korrekturen
+     * weiterhin NULL blue'Logs — live isoliert nachgestellt (dieselbe
+     * Logik, 3 Versuche, SCADA zuerst) scheiterten .201 UND .204 komplett,
+     * zeitgleich mit einer aktiven RPC-Regelung durch den Direktvermarkter
+     * ("der DV hat gerade geregelt"). Unit-ID 97 ist nur die
+     * Selbstauskunft des blue'Log — genau die dürfte während einer
+     * Schreib-Transaktion des Direktvermarkters am ehesten belegt sein.
+     * Die angeschlossenen EINZELGERÄTE (SCADA-Adressen ab
+     * `ScadaAddrStart`) werden davon unabhängig bedient und antworten
+     * erfahrungsgemäß trotzdem. Die SCADA-Erkennung probiert deshalb
+     * zusätzlich zu 97 noch zwei Geräte-IDs aus dem konfigurierten Bereich
+     * (Anfang und Mitte) — jede für sich ein gleichwertiger Nachweis
+     * "hier ist ein blue'Log", mit derselben 3-Versuche-Pause je ID. Mehr
+     * unabhängige Kandidaten statt einer einzigen, potenziell blockierten
+     * Adresse.
      */
     private function identifyBlueLogHost($host, $port): bool
     {
-        if ($this->probeBlueLogInterface(function () use ($host, $port) {
-            return $this->readU16Holding($host, $port, 97, 40000, 0.5) === 0; // SCADA: device_type
-        })) {
-            return true;
+        foreach ($this->blueLogScadaSampleIds() as $unitId) {
+            if ($this->probeBlueLogInterface(function () use ($host, $port, $unitId) {
+                $type = $this->readU16Holding($host, $port, $unitId, 40000, 0.5);
+                if ($type === null) {
+                    return false;
+                }
+                // Unit 97 = das blue'Log selbst (Gerätetyp 0 = "Data logger");
+                // jede andere ID ist ein angeschlossenes Einzelgerät, dessen
+                // Gerätetyp in der bekannten Zuordnung stehen muss.
+                return $unitId === 97 ? $type === 0 : isset(self::BLUELOG_METER_MAP[$type]);
+            })) {
+                return true;
+            }
         }
         if ($this->probeBlueLogInterface(function () use ($host, $port) {
             $f = $this->readFloatSw($host, $port, 1, 98, 0.5); // Power Control: PPC_F_AC
@@ -878,6 +906,23 @@ class MeterHubDiscovery extends IPSModule
             $f = $this->readFloatSw($host, $port, 10, 42, 0.5); // RPC: PPC_F_AC
             return $f !== null && $f >= 45.0 && $f <= 65.0;
         });
+    }
+
+    // Geräte-IDs, die als Nachweis "hier ist ein blue'Log" geprüft werden:
+    // die Selbstauskunft (97) plus Anfang und Mitte des konfigurierten
+    // SCADA-Bereichs — siehe VIERTE KORREKTUR oben.
+    private function blueLogScadaSampleIds(): array
+    {
+        $from = $this->ReadPropertyInteger('ScadaAddrStart');
+        $to   = $this->ReadPropertyInteger('ScadaAddrEnd');
+        if ($to < $from) {
+            [$from, $to] = [$to, $from];
+        }
+        $mid = (int)round(($from + $to) / 2);
+        return array_values(array_unique(array_filter(
+            [97, $from, $mid],
+            fn($id) => $id >= 1 && $id <= 247
+        )));
     }
 
     // Ein Verbindungsversuch mit einer Wiederholung nach längerer Pause,

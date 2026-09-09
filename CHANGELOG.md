@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.24.46-beta.1 (2026-09-09)
+
+- **🔧 Fix: blue'Log-Erkennung stützte sich allein auf die Selbstauskunft des Geräts
+  (Slave 97).** Auch mit den bisherigen Fixes (getrennter Port, drei Versuche mit Pause)
+  fand ein echter Suchlauf über die Instanz weiterhin null blue'Logs. Live isoliert
+  nachgestellt (dieselbe Erkennungslogik, an zwei bekannten echten blue'Logs): beide
+  scheiterten komplett, zeitgleich mit einer aktiven Regelung durch den Direktvermarkter
+  über die RPC-Schnittstelle. Dietmars Hinweis: „vielleicht solltest Du auch mal die
+  Geräte-IDs in dieses Spiel mit einplanen" — Slave 97 ist nur die Selbstauskunft des
+  blue'Log, genau die dürfte während einer Schreib-Transaktion des Direktvermarkters am
+  ehesten belegt sein. Die angeschlossenen Einzelgeräte (SCADA-Adressen ab
+  `ScadaAddrStart`) werden davon unabhängig bedient. Die Erkennung probiert deshalb jetzt
+  zusätzlich zu 97 noch zwei Geräte-IDs aus dem konfigurierten SCADA-Bereich (Anfang und
+  Mitte) — jede für sich ein gleichwertiger Nachweis „hier ist ein blue'Log", mit
+  derselben Drei-Versuche-Pause je ID.
+
 ## 0.24.45-beta.1 (2026-09-08)
 
 - **🔧 Fix: automatische blue'Log-Erkennung verwendete für SCADA/Power Control/RPC immer
