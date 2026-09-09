@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.24.47-beta.1 (2026-09-09)
+
+- **🔧 Kernursache gefunden und behoben: blue'Log verkraftet keine schnelle
+  Verbindungs-Wiederverwendung, aber problemlos viele PARALLELE Verbindungen.**
+  Dietmars Testvorschlag „wir müssen nur z.B. #41462 duplizieren" — live mit
+  echten parallelen Sockets statt einer Instanz-Duplizierung nachgestellt:
+  ein blue'Log beantwortet 8 gleichzeitig offene Verbindungen anstandslos
+  (0,07 s), scheitert aber komplett (0 von 8) bei 8 rasch aufeinander-
+  folgenden Verbindungen (verbinden → anfragen → schließen → sofort neu
+  verbinden) — exakt das Verhalten der bisherigen „mehrere Versuche mit
+  Pause"-Strategie, die das Problem damit eher verschärft als gelöst hatte.
+  - `identifyBlueLogHost()` fragt jetzt alle Kandidaten (SCADA-Selbst-
+    auskunft, zwei Geräte-IDs aus dem SCADA-Bereich, Power Control, RPC) in
+    EINEM Rutsch parallel ab (`probeManyParallel()`, echte Sockets +
+    `stream_select()`), mit einem zweiten parallelen Versuch als Rückfall
+    statt einer wachsenden Pausenkette.
+  - Der SCADA-Adressbereich-Suchlauf (sowohl im automatischen „🔎 Netzwerk
+    durchsuchen" als auch im gezielten „blue'Log-Adressbereich durchsuchen")
+    prüft jetzt bis zu 20 Adressen gleichzeitig statt einzeln mit Pause
+    (`identifyBlueLogDevicesBatch()`) — bei einem vollen 100er-Bereich
+    dadurch deutlich schneller.
+  - Live erneut gegengeprüft: beide zuvor scheiternden echten blue'Logs
+    werden jetzt in unter 0,75 s zuverlässig erkannt.
+  - Alte, jetzt ungenutzte Sequenz-mit-Pause-Hilfsfunktionen entfernt.
+
 ## 0.24.46-beta.1 (2026-09-09)
 
 - **🔧 Fix: blue'Log-Erkennung stützte sich allein auf die Selbstauskunft des Geräts

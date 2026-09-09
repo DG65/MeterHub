@@ -61,19 +61,23 @@ class MeterHubDiscovery extends IPSModule
         1 => 'Wechselrichter',
         3 => 'Zähler',
     ];
-    // Mindestabstand zwischen zwei Modbus-TCP-Verbindungen zur SELBEN
-    // blue'Log-IP. Live am Solarpark isoliert (08.09.2026, Dietmars Fund:
-    // 15 echte blue'Logs im Netz, keiner gefunden): Verbindungsversuche im
-    // 150-ms-Abstand scheitern bei diesem Gerät durchgängig (0 von 8 bzw.
-    // 0 von 10 in mehreren Testläufen), ab 250 ms klappt es zuverlässig
-    // (mehrfach 5/5, 6/6, 3/3) — offenbar verweigert das eingebettete
-    // Modbus-TCP der blue'Log eine neue Verbindung, solange die vorherige
-    // noch "nachwirkt". 300 ms als Sicherheitsabstand über der beobachteten
-    // Schwelle. Kein Problem der falschen Slave-ID/Register (die identische
-    // Anfrage isoliert, mit Pause, antwortet zuverlässig) — ein reines
-    // Verbindungstempo-Problem, das jede noch so genaue Registerwahl
-    // umgeht hätte.
+    // Kurze Verschnaufpause zwischen zwei GANZEN parallelen Anfragerunden
+    // zur selben blue'Log-IP (nicht mehr zwischen einzelnen Verbindungen —
+    // siehe FÜNFTE KORREKTUR bei `identifyBlueLogHost()`: viele
+    // GLEICHZEITIG offene Verbindungen sind für ein blue'Log unproblematisch
+    // (live verifiziert: 8 von 8 in 0,07 s), nur schnelles AUFEINANDER-
+    // FOLGENDES Verbinden/Trennen scheitert durchgängig. Frühere Fassung
+    // dieses Konstanten-Kommentars ging noch von "Pause zwischen jeder
+    // einzelnen Verbindung" aus — das hat das eigentliche Problem eher
+    // verschärft, siehe `probeManyParallel()`.
     private const BLUELOG_CONN_PACING_US = 300000;
+
+    // Wie viele SCADA-Adressen (Geräte-IDs) je Bündel GLEICHZEITIG geprüft
+    // werden — siehe `identifyBlueLogDevicesBatch()`. Klein genug, um nicht
+    // an Datei-Deskriptor-/Socket-Limits zu stoßen, groß genug, um einen
+    // vollen 100er-Adressbereich in wenigen Bündeln statt 100 Einzel-
+    // verbindungen mit Pause abzuarbeiten.
+    private const BLUELOG_SCAN_BATCH_SIZE = 20;
 
     public function Create()
     {
@@ -117,7 +121,7 @@ class MeterHubDiscovery extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.24.46';
+    private const NEWS_VERSION = '0.24.47';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -156,7 +160,7 @@ class MeterHubDiscovery extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
-                ['type' => 'Label', 'caption' => '• 🔧 Fix: blue\'Log-Erkennung stützte sich allein auf die Selbstauskunft des Geräts (Slave 97) — genau die dürfte während einer aktiven Regelung durch den Direktvermarkter am ehesten belegt sein (Dietmars Hinweis: „vielleicht solltest Du auch mal die Geräte-IDs in dieses Spiel mit einplanen"). Zusätzlich zu 97 zählen jetzt zwei Geräte-IDs aus dem konfigurierten SCADA-Bereich (Anfang und Mitte) gleichwertig als Nachweis — die angeschlossenen Einzelgeräte werden unabhängig von der Selbstauskunft bedient und antworten oft, wenn diese gerade beschäftigt ist.'],
+                ['type' => 'Label', 'caption' => '• 🔧 Kernfix: blue\'Log-Erkennung fragte bisher eine Schnittstelle nach der anderen ab, mit Pause dazwischen — genau das lässt ein blue\'Log offenbar scheitern (live gemessen: 8 rasch AUFEINANDERFOLGENDE Verbindungen scheitern komplett, 8 GLEICHZEITIGE werden dagegen anstandslos beantwortet). Alle Kandidaten — SCADA-Selbstauskunft, zwei Geräte-IDs aus dem konfigurierten Bereich, Power Control, RPC — werden jetzt in einem Rutsch parallel angefragt. Dasselbe gilt für den SCADA-Adressbereich-Suchlauf: bis zu 20 Adressen gleichzeitig statt einzeln mit Pause, dadurch spürbar schneller.'],
                 ['type' => 'Label', 'caption' => '• 🔧 Fix: automatische blue\'Log-Erkennung verwendete für SCADA/Power Control/RPC immer denselben Port wie die klassische Zählersuche (Dietmars Fund: „Standardmäßig wird mit dem Port 502 gescannt, SCADA und Power Control/RPC haben aber andere Register"). Läuft ein blue\'Log auf einem abweichenden Port, probiert „🔎 Netzwerk durchsuchen" jetzt zusätzlich den im Panel „blue\'Log SCADA-Adressbereich" eingetragenen Port — beide Panels erklären das jetzt auch im Formulartext.'],
                 ['type' => 'Label', 'caption' => '• 🔧 Fix: blue\'Log-Erkennung fand in der Praxis KEINEN einzigen blue\'Log (Dietmars Live-Fund: 15 echte Geräte im Netz, null Treffer). Ursache laut Live-Messung: mehrere rasch aufeinanderfolgende Modbus-TCP-Verbindungen zum selben Gerät scheitern reihenweise, besonders bei parallel laufenden eigenen Regel-Skripten — jede Schnittstellen-Prüfung bekommt jetzt bis zu drei Versuche mit wachsender Pause. Reihenfolge zusätzlich an die reale Geräteflotte angepasst: SCADA zuerst (meist vorhanden), Power Control/RPC nur noch als Rückfall für Master-/EZA-Regler.'],
                 ['type' => 'Label', 'caption' => '• 🆕 „🔎 Netzwerk durchsuchen" erkennt Meteocontrol-blue\'Log-Datenlogger jetzt von sich aus — keine vorher bekannte IP mehr nötig. Bei einem Treffer wird automatisch der eingestellte SCADA-Adressbereich dahinter mitdurchsucht, dieselbe Fundliste wie bei klassischen Zählern.'],
@@ -725,12 +729,14 @@ class MeterHubDiscovery extends IPSModule
             }
             if ($isBlueLog) {
                 $blueLogsFound++;
-                foreach (range($scadaFrom, $scadaTo) as $addr) {
+                $scadaAddrs = range($scadaFrom, $scadaTo);
+                foreach (array_chunk($scadaAddrs, self::BLUELOG_SCAN_BATCH_SIZE) as $batch) {
                     if ($this->scanAborted()) { $aborted = true; break 2; }
-                    usleep(self::BLUELOG_CONN_PACING_US);
-                    $this->ShowProgress("blue'Log $ip gefunden — SCADA-Adresse $addr …", (int)round(($i / max(1, $total)) * 100));
-                    $blueLogFound = $this->identifyBlueLogDevice($ip, $blueLogPortUsed, $addr);
-                    if ($blueLogFound !== null) {
+                    $this->ShowProgress(
+                        "blue'Log $ip gefunden — SCADA-Adressen {$batch[0]}–" . end($batch) . ' …',
+                        (int)round(($i / max(1, $total)) * 100)
+                    );
+                    foreach ($this->identifyBlueLogDevicesBatch($ip, $blueLogPortUsed, $batch) as $blueLogFound) {
                         $results[] = $blueLogFound;
                     }
                 }
@@ -802,19 +808,18 @@ class MeterHubDiscovery extends IPSModule
 
         $results = [];
         $total   = count($addrs);
-        $i       = 0;
+        $done    = 0;
         $aborted = $this->scanAborted();
-        foreach ($addrs as $addr) {
+        foreach (array_chunk($addrs, self::BLUELOG_SCAN_BATCH_SIZE) as $batch) {
             if ($this->scanAborted()) { $aborted = true; break; }
-            $i++;
-            if ($i > 1) {
-                usleep(self::BLUELOG_CONN_PACING_US);
-            }
-            $this->ShowProgress("SCADA-Adresse $addr ($i von $total) …", (int)round(($i / max(1, $total)) * 100));
-            $found = $this->identifyBlueLogDevice($host, $port, $addr);
-            if ($found !== null) {
+            $this->ShowProgress(
+                "SCADA-Adressen {$batch[0]}–" . end($batch) . " ($done von $total) …",
+                (int)round(($done / max(1, $total)) * 100)
+            );
+            foreach ($this->identifyBlueLogDevicesBatch($host, $port, $batch) as $found) {
                 $results[] = $found;
             }
+            $done += count($batch);
         }
 
         if ($aborted) {
@@ -879,33 +884,67 @@ class MeterHubDiscovery extends IPSModule
      * "hier ist ein blue'Log", mit derselben 3-Versuche-Pause je ID. Mehr
      * unabhängige Kandidaten statt einer einzigen, potenziell blockierten
      * Adresse.
+     *
+     * FÜNFTE KORREKTUR, noch am selben Tag (Dietmars Testvorschlag "wir
+     * müssen nur z.B. #41462 duplizieren" — live mit parallelen Sockets
+     * statt einer Instanz-Duplizierung nachgestellt): DAS war die
+     * eigentliche Ursache. Ein blue'Log beantwortet 8 GLEICHZEITIG offene
+     * Verbindungen anstandslos (0,07 s), aber 8 rasch AUFEINANDERFOLGENDE
+     * Verbindungen (verbinden → anfragen → schließen → sofort neu
+     * verbinden — genau das, was die "3 Versuche mit Pause"-Strategie
+     * bisher tat) scheitern ALLE. Die bisherige Sequenz-mit-Pause-Logik
+     * (`probeBlueLogInterface()`) hat das Problem also eher verschärft als
+     * gelöst. Alle Kandidaten (SCADA-Geräte-IDs + Power Control + RPC)
+     * werden jetzt über `probeManyParallel()` in EINEM Rutsch gleichzeitig
+     * angefragt, mit einem zweiten parallelen Versuch als Rückfall statt
+     * einer wachsenden Pausenkette.
      */
     private function identifyBlueLogHost($host, $port): bool
     {
+        $targets = [];
         foreach ($this->blueLogScadaSampleIds() as $unitId) {
-            if ($this->probeBlueLogInterface(function () use ($host, $port, $unitId) {
-                $type = $this->readU16Holding($host, $port, $unitId, 40000, 0.5);
-                if ($type === null) {
-                    return false;
+            $targets[] = ['host' => $host, 'port' => $port, 'unitId' => $unitId, 'reg' => 40000, 'count' => 1, 'kind' => 'scada'];
+        }
+        $targets[] = ['host' => $host, 'port' => $port, 'unitId' => 1, 'reg' => 98, 'count' => 2, 'kind' => 'freq']; // Power Control: PPC_F_AC
+        $targets[] = ['host' => $host, 'port' => $port, 'unitId' => 10, 'reg' => 42, 'count' => 2, 'kind' => 'freq']; // RPC: PPC_F_AC
+
+        for ($attempt = 0; $attempt < 2; $attempt++) {
+            $results = $this->probeManyParallel($targets, 0.7);
+            foreach ($targets as $i => $t) {
+                $regs = $results[$i] ?? null;
+                if ($regs === null) {
+                    continue;
                 }
-                // Unit 97 = das blue'Log selbst (Gerätetyp 0 = "Data logger");
-                // jede andere ID ist ein angeschlossenes Einzelgerät, dessen
-                // Gerätetyp in der bekannten Zuordnung stehen muss.
-                return $unitId === 97 ? $type === 0 : isset(self::BLUELOG_METER_MAP[$type]);
-            })) {
-                return true;
+                if ($t['kind'] === 'scada') {
+                    $type = $regs[0] ?? -1;
+                    // Unit 97 = das blue'Log selbst (Gerätetyp 0 = "Data
+                    // logger"); jede andere ID ist ein angeschlossenes
+                    // Einzelgerät, dessen Gerätetyp in der bekannten
+                    // Zuordnung stehen muss.
+                    if ($t['unitId'] === 97 ? $type === 0 : isset(self::BLUELOG_METER_MAP[$type])) {
+                        return true;
+                    }
+                } elseif (count($regs) >= 2) {
+                    $f = $this->wordSwappedFloat($regs[0], $regs[1]);
+                    if ($f !== null && $f >= 45.0 && $f <= 65.0) {
+                        return true;
+                    }
+                }
+            }
+            if ($attempt === 0) {
+                usleep(self::BLUELOG_CONN_PACING_US); // kurze Verschnaufpause vor einem zweiten parallelen Versuch
             }
         }
-        if ($this->probeBlueLogInterface(function () use ($host, $port) {
-            $f = $this->readFloatSw($host, $port, 1, 98, 0.5); // Power Control: PPC_F_AC
-            return $f !== null && $f >= 45.0 && $f <= 65.0;
-        })) {
-            return true;
-        }
-        return $this->probeBlueLogInterface(function () use ($host, $port) {
-            $f = $this->readFloatSw($host, $port, 10, 42, 0.5); // RPC: PPC_F_AC
-            return $f !== null && $f >= 45.0 && $f <= 65.0;
-        });
+        return false;
+    }
+
+    // Zwei UInt16-Register (wortgetauscht, CDAB) als IEEE-754-Float32
+    // interpretieren — dieselbe Konvention wie bei den blue'Log-Treibern in
+    // MeterHub/module.php (ByteOrder 3, live verifiziert).
+    private function wordSwappedFloat(int $regHigh, int $regLow): ?float
+    {
+        $f = unpack('G', pack('nn', $regLow, $regHigh))[1] ?? null;
+        return ($f !== null && is_finite($f)) ? (float)$f : null;
     }
 
     // Geräte-IDs, die als Nachweis "hier ist ein blue'Log" geprüft werden:
@@ -925,51 +964,47 @@ class MeterHubDiscovery extends IPSModule
         )));
     }
 
-    // Ein Verbindungsversuch mit einer Wiederholung nach längerer Pause,
-    // falls der erste scheitert — siehe die dritte Korrektur im Kommentar
-    // oben. $attempt liefert true/false, ohne selbst zu pausieren.
-    private function probeBlueLogInterface(callable $attempt): bool
-    {
-        foreach ([1, 2, 4] as $backoffFactor) {
-            usleep(self::BLUELOG_CONN_PACING_US * $backoffFactor);
-            if ($attempt()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     /**
-     * Eine SCADA-Adresse prüfen: Register 40000 (Gerätetyp) lesen. Keine
-     * Antwort = keine Adresse belegt, dort einfach nichts (kein Fehler).
-     * Unbekannter/nicht unterstützter Gerätetyp (Sensor, Tracker, Genset,
-     * Batterie, Kraftwerksregler, das blue'Log selbst @ 97) wird gefunden,
-     * aber bewusst NICHT vorgeschlagen — dafür gibt es noch keinen Treiber.
-     * Modell-String (40033) nur zur schöneren Beschriftung, rein optional.
+     * Ein ganzes Bündel SCADA-Adressen GLEICHZEITIG prüfen statt eine nach
+     * der anderen mit Pause — siehe FÜNFTE KORREKTUR bei
+     * `identifyBlueLogHost()`: viele parallele Verbindungen sind für ein
+     * blue'Log unproblematisch, schnelles Nacheinander dagegen nicht. Nur
+     * die erste, billige Existenzprüfung (Register 40000) läuft parallel;
+     * die Detailabfragen (Modellname, Busadresse) laufen für die wenigen
+     * tatsächlichen Treffer weiterhin einzeln nacheinander — bei einem
+     * typischen SCADA-Bereich sind das nur eine Handvoll echter Geräte,
+     * kein spürbarer Zeitverlust, und weniger Risiko als auch diese
+     * Detailabfragen zu parallelisieren.
      */
-    private function identifyBlueLogDevice($host, $port, $unitId)
+    private function identifyBlueLogDevicesBatch($host, $port, array $unitIds): array
     {
-        // Kürzerer Zeitlimit für die reine Existenzprüfung: bei einem vollen
-        // 1-247-Adressbereich sind die meisten Adressen unbelegt (Dietmars
-        // Fund 08.09.2026) — jede davon würde sonst mit vollen 1,0 s
-        // Zeitüberschreitung den Suchlauf spürbar verlangsamen. Ein bereits
-        // konfiguriertes Gerät antwortet auf demselben lokalen Netz deutlich
-        // schneller; unbelegte Funde landen ohnehin nie im Ergebnis.
-        $type = $this->readU16Holding($host, $port, $unitId, 40000, 0.5);
-        if ($type === null || !isset(self::BLUELOG_METER_MAP[$type])) {
-            return null;
+        $targets = [];
+        foreach ($unitIds as $unitId) {
+            $targets[] = ['host' => $host, 'port' => $port, 'unitId' => $unitId, 'reg' => 40000, 'count' => 1];
         }
-        $model   = trim((string)$this->readAscii($host, $port, $unitId, 40033, 32, 1.5));
-        $busAddr = $this->readU16Holding($host, $port, $unitId, 40113, 1.0); // RS485-Busadresse, siehe blue'Log-Geräteliste Spalte "Adresse"
-        $label   = self::BLUELOG_TYPE_LABELS[$type] . ($model !== '' ? " ($model)" : '');
-        return [
-            'ip'      => $host,
-            'port'    => $port,
-            'unitId'  => $unitId,
-            'meter'   => self::BLUELOG_METER_MAP[$type],
-            'label'   => $label,
-            'busAddr' => $busAddr, // nur von der blue'Log-Suche gefüllt, sonst null
-        ];
+        $results = $this->probeManyParallel($targets, 0.7);
+
+        $found = [];
+        foreach ($targets as $i => $t) {
+            $regs = $results[$i] ?? null;
+            $type = $regs[0] ?? null;
+            if ($type === null || !isset(self::BLUELOG_METER_MAP[$type])) {
+                continue;
+            }
+            $unitId  = $t['unitId'];
+            $model   = trim((string)$this->readAscii($host, $port, $unitId, 40033, 32, 1.5));
+            $busAddr = $this->readU16Holding($host, $port, $unitId, 40113, 1.0);
+            $label   = self::BLUELOG_TYPE_LABELS[$type] . ($model !== '' ? " ($model)" : '');
+            $found[] = [
+                'ip'      => $host,
+                'port'    => $port,
+                'unitId'  => $unitId,
+                'meter'   => self::BLUELOG_METER_MAP[$type],
+                'label'   => $label,
+                'busAddr' => $busAddr,
+            ];
+        }
+        return $found;
     }
 
     // UInt16 per FC 0x03 (Holding-Register) — blue'Log-SCADA-Gerätetyp (40000).
@@ -1379,19 +1414,93 @@ class MeterHubDiscovery extends IPSModule
         return $this->modbusRead($host, $port, $unitId, 0x03, $startReg, $count, $timeout);
     }
 
-    // Float32 mit getauschter Wortreihenfolge (CDAB) per FC 0x03 — blue'Log
-    // Power-Control-/RPC-Schnittstellen (ByteOrder 3, live verifiziert über
-    // IPS_GetConfiguration() bestehender ModBus-Address-Instanzen am
-    // Solarpark, siehe MHUB_BlueLogPowerControlDriver/MHUB_BlueLogRpcDriver
-    // in MeterHub/module.php).
-    private function readFloatSw($host, $port, $unitId, $startReg, $timeout)
+    /**
+     * Mehrere Holding-Register-Anfragen ECHT GLEICHZEITIG stellen statt
+     * nacheinander mit Pause — live am Solarpark verifiziert (09.09.2026,
+     * Dietmars Testvorschlag "wir müssen nur z.B. #41462 duplizieren", hier
+     * stattdessen direkt mit parallelen Sockets nachgestellt): ein blue'Log
+     * beantwortet 8 gleichzeitig offene Verbindungen anstandslos (0,07 s),
+     * scheitert aber komplett (0 von 8) bei 8 rasch AUFEINANDERFOLGENDEN
+     * Verbindungen (verbinden → anfragen → schließen → sofort neu
+     * verbinden) — das eingebettete Gerät verkraftet offenbar keine
+     * schnelle Verbindungs-Wiederverwendung, aber problemlos mehrere
+     * parallele Sitzungen. Ersetzt damit die bisherige
+     * "Sequenz-mit-wachsender-Pause"-Strategie (`probeBlueLogInterface()`),
+     * die genau das falsche Verhalten (schnelles Nacheinander) noch
+     * verstärkt hatte.
+     *
+     * $targets: Liste von ['host', 'port', 'unitId', 'reg', 'count'].
+     * Rückgabe: Liste in derselben Reihenfolge/denselben Schlüsseln, je
+     * Eintrag entweder null (keine/keine gültige Modbus-Antwort) oder das
+     * Array der gelesenen 16-Bit-Register.
+     */
+    private function probeManyParallel(array $targets, float $timeout): array
     {
-        $regs = $this->readHolding($host, $port, $unitId, $startReg, 2, $timeout);
-        if ($regs === null || count($regs) < 2) {
-            return null;
+        $sockets = [];
+        foreach ($targets as $i => $t) {
+            $s = @stream_socket_client("tcp://{$t['host']}:{$t['port']}", $errno, $errstr, $timeout, STREAM_CLIENT_CONNECT);
+            $sockets[$i] = $s;
+            if ($s !== false) {
+                stream_set_blocking($s, false);
+                $pdu  = pack('Cnn', 0x03, $t['reg'], $t['count']);
+                $mbap = pack('nnn', mt_rand(1, 65535), 0, strlen($pdu) + 1) . chr($t['unitId']);
+                @fwrite($s, $mbap . $pdu);
+            }
         }
-        $f = (float)(unpack('G', pack('nn', $regs[1] & 0xFFFF, $regs[0] & 0xFFFF))[1] ?? 0.0);
-        return is_finite($f) ? $f : null;
+
+        $buffers = [];
+        foreach (array_keys($targets) as $i) {
+            $buffers[$i] = '';
+        }
+        $deadline = microtime(true) + $timeout;
+        while (microtime(true) < $deadline) {
+            $read = [];
+            foreach ($sockets as $i => $s) {
+                if ($s !== false && strlen($buffers[$i]) < 9) {
+                    $read[$i] = $s;
+                }
+            }
+            if (empty($read)) {
+                break;
+            }
+            $write     = null;
+            $except    = null;
+            $remaining = max(0.0, $deadline - microtime(true));
+            $sec       = (int)$remaining;
+            $usec      = (int)(($remaining - $sec) * 1000000);
+            $n = @stream_select($read, $write, $except, $sec, $usec);
+            if ($n > 0) {
+                foreach ($read as $i => $s) {
+                    $chunk = @fread($s, 512);
+                    if ($chunk !== false) {
+                        $buffers[$i] .= $chunk;
+                    }
+                }
+            }
+        }
+
+        $results = [];
+        foreach ($targets as $i => $t) {
+            if ($sockets[$i] !== false) {
+                @fclose($sockets[$i]);
+            }
+            $resp = $buffers[$i];
+            if (strlen($resp) < 9 || ord($resp[7]) !== 0x03) {
+                $results[$i] = null;
+                continue;
+            }
+            $byteCount = ord($resp[8]);
+            if (strlen($resp) < 9 + $byteCount) {
+                $results[$i] = null;
+                continue;
+            }
+            $regs = [];
+            for ($k = 0; $k < $byteCount / 2; $k++) {
+                $regs[] = (ord($resp[9 + $k * 2]) << 8) | ord($resp[10 + $k * 2]);
+            }
+            $results[$i] = $regs;
+        }
+        return $results;
     }
 
     private function readInput($host, $port, $unitId, $startReg, $count, $timeout)
