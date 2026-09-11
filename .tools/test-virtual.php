@@ -1610,5 +1610,41 @@ check('35k: Leistung unverändert (1200 − 900)', abs((float)t35_out($cIid, 'po
 check('35k: Bezug unverändert', abs((float)t35_out($cIid, 'energy_import') - $beforeI) < 0.01, "$beforeI → " . t35_out($cIid, 'energy_import'));
 check('35k: zweiter Aufruf ändert nichts', str_contains($c->ConvertToTree(), 'bereits'));
 
+echo "  35l) Dashboard-Befunde 11.09.2026: Schalter am Ziel erkennen, leere Link-Namen, sourceCount\n";
+check('35l: Test-IDs 4900–4933 frei', !IPS_ObjectExists(4900) && !IPS_ObjectExists(4910) && !IPS_ObjectExists(4920) && !IPS_ObjectExists(4930));
+function t35_zwave($iid, $name, $power, array $bools) {
+    obj($iid, 1, $name, 10);
+    $GLOBALS['INSTMOD'][$iid] = '{TEST-ZWAVE}';
+    if ($power !== null) { vari($iid + 1, 'Leistung', $iid, '', 'MHB.W', $power); }
+    $i = 2;
+    foreach ($bools as $ident => $bname) { vari($iid + $i++, $bname, $iid, $ident, '~Switch', false, 0, 0, 1); }
+}
+t35_zwave(4900, 'Terrasse', 40.0, ['StatusVariable' => 'Status', 'DataVariableBoolean' => 'Daten (Boolean)']);
+t35_zwave(4910, 'Flur', 20.0, ['StatusVariable' => 'Status']);
+t35_zwave(4920, 'Zweikanal', 10.0, ['Ch1' => 'Kanal 1', 'Ch2' => 'Kanal 2']);
+t35_zwave(4930, 'Nur Schalter', null, ['StatusVariable' => 'Status']);
+$dIid = IPS_CreateInstance(T35_GV);
+IPS_SetParent($dIid, 10);
+IPS_SetProperty($dIid, 'Function', 'light');
+$lTer = t35_link($dIid, 4900, '', 100);   // Links ohne eigenen Namen
+$lFlur = t35_link($dIid, 4910, '', 110);
+$lZwei = t35_link($dIid, 4920, '', 120);
+$lNur = t35_link($dIid, 4930, '', 130);
+$d = t35_apply($dIid);
+$nodesD = t35_call($d, 'Nodes');
+check('35l: leerer Link-Name fällt auf den Zielnamen zurück', array_column($nodesD, 'name') === ['Terrasse', 'Flur', 'Zweikanal', 'Nur Schalter'], json_encode(array_column($nodesD, 'name'), JSON_UNESCAPED_UNICODE));
+check('35l: Schalter automatisch erkannt — Terrasse wählt eindeutig die StatusVariable, Zweikanal bleibt offen', array_column($nodesD, 'switch') === [4902, 4912, 0, 4932], json_encode(array_column($nodesD, 'switch')));
+$warnD = implode(' | ', t35_call($d, 'Warnings', $nodesD));
+check('35l: mehrdeutiger Zweikanal-Aktor wird gewarnt statt geraten', str_contains($warnD, 'Zweikanal') && str_contains($warnD, 'nicht eindeutig'), $warnD);
+check('35l: Gruppenschalter entsteht ohne jede Einstellung', (bool)IPS_GetObjectIDByIdent('group_switch', $dIid));
+$gfD = json_decode($d->GetFunctions(), true);
+check('35l: members[] tragen Namen und switchID', array_column($gfD['members'], 'name')[0] === 'Terrasse' && array_column($gfD['members'], 'switchID')[1] === 4912, json_encode($gfD['members'], JSON_UNESCAPED_UNICODE));
+check('35l: sourceCount zählt nur messende Mitglieder (3 von 4)', ($gfD['assignments'][0]['sourceCount'] ?? -1) === 3 && count($gfD['members']) === 4, json_encode($gfD['assignments'][0]['sourceCount'] ?? null));
+$rowsD = t35_call($d, 'TreeFormRows');
+check('35l: Formular speichert den automatischen Schalter NICHT als Übersteuerung', ($rowsD[0]['SwitchID'] ?? -1) === 0 && str_contains($rowsD[0]['Found'], 'Schalter: Status'), json_encode($rowsD[0], JSON_UNESCAPED_UNICODE));
+IPS_SetProperty($dIid, 'MemberSettings', json_encode([['MemberID' => $lFlur, 'NoSwitch' => true], ['MemberID' => $lZwei, 'SwitchID' => 4923]]));
+$d = t35_apply($dIid);
+check('35l: „nicht schalten" und Übersteuerung wirken', array_column(t35_call($d, 'Nodes'), 'switch') === [4902, 0, 4923, 4932], json_encode(array_column(t35_call($d, 'Nodes'), 'switch')));
+
 echo "\n" . ($fails === 0 ? "ALLE PRÜFUNGEN BESTANDEN\n" : "$fails PRÜFUNG(EN) FEHLGESCHLAGEN\n");
 exit($fails === 0 ? 0 : 1);

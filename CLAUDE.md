@@ -387,7 +387,7 @@ Dazu auf **Instanz-Ebene** (neben `instanceID`/`meter`/`measureMode`), abgestimm
 | `latency` | `'realtime'` (lokal, in Sekunden regelbar) oder `'delayed'` (Cloud-API mit Latenz) — Regelfähigkeit |
 | `authority` | `'billing'` (geeichter, abrechnungsverbindlicher Zähler am Netzübergabepunkt) oder `'auxiliary'` (Hilfszähler) |
 | `pollInterval` | reale Aktualisierungsrate in Sekunden |
-| `sourceCount` | nur MHUBV: Zahl der beteiligten Quellen eines Rest-/Summenknotens (Güte) |
+| `sourceCount` | nur MHUBV: Zahl der **messenden** Mitglieder (mindestens ein Datenpunkt) eines Rest-/Summenknotens (Güte). Seit 0.25.1 ausdrücklich ≤ `count(members)` — im Baum-Modus stehen auch reine Schalt-Mitglieder und tote Links in `members[]` (Dashboard-Frage 11.09.2026) |
 | `archiveWatermarkTs` | nur bei `latency: 'delayed'`: Unix-Zeitstempel des letzten **vollständig archivierten** Datensatzes, sonst `null`. Bei `'realtime'` bewusst `null` statt eines Werts — dort ist Archiv praktisch verzögerungsfrei, eine Abfrage brächte keinen Erkenntnisgewinn |
 
 **`latency` und `authority` sind orthogonal, keine Gegenteile** — alle vier Kombinationen
@@ -894,6 +894,12 @@ SDK-Doku lädt eine property-gebundene Liste sonst ZUERST die gespeicherten Zeil
 einer Baum-Änderung stünden veraltete Zeilen daneben). Nicht editierbare Spalten werden
 nur mit `save: true` gespeichert → `MemberID` hat `save: true`; ersatzweise ordnet
 `MemberSettingsMap()` nach Zeilen-Position zu (Liste hat kein add/delete/changeOrder).
+
+**Schalter (0.25.1, Dashboard-Befund):** wie die Datenpunkte bei jedem Takt am Ziel
+gesucht (`SwitchOfDevice()`, nur Instanz-Ziele), `SwitchID` ist nur Übersteuerung,
+`NoSwitch` schaltet bewusst ab. Mehrdeutig → genau eine Variable mit Ident
+`StatusVariable` (Symcon-Z-Wave, an 21 Aktoren belegt) gewinnt, sonst Warnung. Leerer
+Link-Name → Zielname (Symcon zeigt es im Baum genauso, ObjectName ist aber `""`).
 
 **Blockierend** (`TreeErrors()`): Selbstbezug, Mitglied liefert eigene Ausgabe, Kreisverweis
 über verschachtelte Instanzen (`ReferencesInstance()`, beide Mitglieder-Quellen, Tiefe

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.25.1-beta.1 (2026-09-11)
+
+Drei Befunde der Dashboard-Sitzung aus Dietmars Live-Anlage („Licht EG"/„Licht OG",
+21 Z-Wave-Aktoren als Links):
+
+- **🔀 Schalter werden im Baum-Modus am Ziel erkannt.** Bisher kam der Schalter nur aus
+  einer gespeicherten Einstellung — ohne sie war kein Mitglied schaltbar und die
+  Gruppenschaltung hatte nichts zu tun. Jetzt sucht das Modul bei jedem Takt wie bei
+  Leistung/Bezug die schaltbare Bool-Variable am verknüpften Gerät. Hat ein Gerät
+  mehrere, gewinnt genau eine mit dem Ident `StatusVariable` (Schaltvariable des
+  Symcon-Z-Wave-Moduls, an allen 21 Aktoren belegt); sonst ⚠️ Hinweis statt Raten.
+  Neue Spalte „nicht schalten", die Schalter-Spalte heißt jetzt „Schalter übersteuern"
+  und speichert nur noch eine bewusste Abweichung.
+- **Links ohne eigenen Namen** heißen wie ihr Ziel (so zeigt Symcon sie auch im Baum) —
+  bisher standen sie namenlos in Formular, Kachel und `members[]`.
+- **`sourceCount`** zählt nur noch messende Mitglieder (mit mindestens einem Datenpunkt),
+  wie dokumentiert („Güte"); `members[]` enthält weiterhin auch reine Schalt-Mitglieder.
+- Prüfstand Block 35l.
+
 ## 0.25.0-beta.1 (2026-09-11)
 
 - **🌳 MeterHubVirtual: Mitglieder direkt im Objektbaum.** Dietmars Anregung: „einen

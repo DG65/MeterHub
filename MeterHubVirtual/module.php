@@ -70,7 +70,7 @@ class MeterHubVirtual extends IPSModule
     // Formular-Konvention des Verbunds (SUITE.md „Einheitliche Formular-
     // Optik", Referenz InverterHub). NEWS_VERSION korrespondiert mit dem
     // CHANGELOG-Eintrag, der den jeweiligen Sprung erklärt.
-    private const NEWS_VERSION = '0.25.0';
+    private const NEWS_VERSION = '0.25.1';
 
     public function Create()
     {
@@ -274,6 +274,7 @@ class MeterHubVirtual extends IPSModule
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
                 ['type' => 'Label', 'caption' => '• 🌳 Neu: Mitglieder direkt im Objektbaum — alles, was als Verknüpfung (Link) oder direkt unter dieser Instanz hängt, wird automatisch Mitglied, in der Reihenfolge seiner Position dort. Neue Instanzen starten so; gelöschte Geräte fallen sofort als „Ziel fehlt" auf statt still als Leiche weiterzuleben.'],
+                ['type' => 'Label', 'caption' => '• 🔀 Schalter der verknüpften Geräte werden automatisch erkannt (Gruppe schalten ohne Einstellung); mehrdeutige Geräte werden gemeldet. Pro Mitglied lässt sich übersteuern oder „nicht schalten" wählen. Links ohne eigenen Namen heißen wie ihr Ziel.'],
                 ['type' => 'Label', 'caption' => '• 🌳 Verschachteln: einen Link auf eine andere virtuelle Zähler-Instanz unterhängen (z. B. mehrere Wallbox-Zähler unter „Fahrzeugbeladung"). Kreisverweise werden erkannt und blockiert.'],
                 ['type' => 'Label', 'caption' => '• 🌳 Instanzen mit der bisherigen Tabelle rechnen unverändert weiter. Ein Knopf „In Objektbaum-Mitglieder umwandeln" legt auf Wunsch die Links an — rechnerisch identisch, die alte Tabelle wird gesichert.'],
                 ['type' => 'Label', 'caption' => '• Komplett neues, einfacheres Modell: Diese Instanz ist jetzt selbst die oberste Ebene. Jede Zeile ist ein Term mit einem Anteil in Prozent — kein „Kürzel“, kein „hängt hinter“, keine Sammelzeilen mehr.'],
@@ -424,13 +425,22 @@ class MeterHubVirtual extends IPSModule
             } else {
                 continue;
             }
+            $broken = $target <= 0 || !IPS_ObjectExists($target);
+            // Ein Link ohne eigenen Namen zeigt im Symcon-Baum den Zielnamen,
+            // sein ObjectName ist aber leer (Dashboard-Befund an Dietmars
+            // Anlage, 11.09.2026) — hier genauso zurückfallen, sonst stünde
+            // das Mitglied namenlos in Formular, Kachel und Vertrag.
+            $name = (string)$o['ObjectName'];
+            if ($name === '') {
+                $name = $broken ? '#' . $cid : IPS_GetName($target);
+            }
             $out[] = [
                 'member' => $cid,
-                'name'   => (string)$o['ObjectName'],
+                'name'   => $name,
                 'pos'    => (int)($o['ObjectPosition'] ?? 0),
                 'isLink' => $type === 6,
                 'target' => $target,
-                'broken' => $target <= 0 || !IPS_ObjectExists($target),
+                'broken' => $broken,
             ];
         }
         usort($out, function ($a, $b) {
@@ -473,10 +483,11 @@ class MeterHubVirtual extends IPSModule
      * Zeilen, plus member/isLink/target/broken. Leistung/Bezug/Einspeisung
      * werden bei jedem Aufruf frisch am Ziel aufgelöst (MetersOfDevice() bzw.
      * die Rolle einer direkt verknüpften Variable); ein Wert > 0 in den
-     * Einstellungen übersteuert das. Der Schalter wird NICHT live geraten,
-     * nur beim Verknüpfen vorgeschlagen bzw. per „Schalter suchen"
-     * eingetragen — sonst ließe sich „bewusst kein Schalter" nicht
-     * ausdrücken.
+     * Einstellungen übersteuert das. Der Schalter wird genauso am Ziel
+     * gesucht (SwitchOfDevice(), nur bei einer Instanz als Ziel) —
+     * Dashboard-Befund 11.09.2026: 21 Z-Wave-Aktoren unter Dietmars
+     * „Licht EG/OG" blieben sonst unschaltbar. Übersteuern per SwitchID,
+     * bewusst abschalten per NoSwitch.
      */
     private function TreeNodes(): array
     {
@@ -503,13 +514,20 @@ class MeterHubVirtual extends IPSModule
             $pick = function (string $field, string $key) use ($s, $auto): int {
                 return (int)($s[$key] ?? 0) > 0 ? (int)$s[$key] : $auto[$field];
             };
+            $switch = (int)($s['SwitchID'] ?? 0);
+            $switchNote = '';
+            if ($switch <= 0 && empty($s['NoSwitch']) && !$m['broken']
+                && (int)IPS_GetObject($m['target'])['ObjectType'] === 1) {
+                [$switch, $switchNote] = $this->SwitchOfDevice($m['target']);
+            }
             $out[] = [
+                'switchNote' => $switchNote,
                 'name'   => $m['name'],
                 'factor' => array_key_exists('Factor', $s) ? (float)$s['Factor'] : 100.0,
                 'power'  => $pick('power', 'PowerID'),
                 'imp'    => $pick('imp', 'EnergyImportID'),
                 'exp'    => $pick('exp', 'EnergyExportID'),
-                'switch' => (int)($s['SwitchID'] ?? 0),
+                'switch' => $switch,
                 'member' => $m['member'],
                 'isLink' => $m['isLink'],
                 'target' => $m['target'],
@@ -524,7 +542,9 @@ class MeterHubVirtual extends IPSModule
     {
         $parts = [];
         foreach ($nodes as $n) {
-            $parts[] = [$n['member'] ?? 0, $n['target'] ?? 0, $n['name'], $n['broken'] ?? false, $n['power'], $n['imp'], $n['exp']];
+            // switch gehört dazu: ein neu erkannter Schalter muss die
+            // Gruppenvariablen (RegisterVariables()) nachziehen.
+            $parts[] = [$n['member'] ?? 0, $n['target'] ?? 0, $n['name'], $n['broken'] ?? false, $n['power'], $n['imp'], $n['exp'], $n['switch']];
         }
         return md5((string)json_encode($parts));
     }
@@ -756,7 +776,11 @@ class MeterHubVirtual extends IPSModule
                 'PowerID'        => (int)($s['PowerID'] ?? 0),
                 'EnergyImportID' => (int)($s['EnergyImportID'] ?? 0),
                 'EnergyExportID' => (int)($s['EnergyExportID'] ?? 0),
-                'SwitchID'       => $n['switch'],
+                // Nur die Übersteuerung — der automatisch gefundene Schalter
+                // steht in „Erkannt"; ihn hier einzutragen würde ihn beim
+                // Speichern einfrieren.
+                'SwitchID'       => (int)($s['SwitchID'] ?? 0),
+                'NoSwitch'       => !empty($s['NoSwitch']),
             ];
         }
         return $rows;
@@ -773,6 +797,11 @@ class MeterHubVirtual extends IPSModule
             if ($n[$f] > 0 && IPS_ObjectExists($n[$f])) {
                 $parts[] = $lbl . ': ' . IPS_GetName($n[$f]);
             }
+        }
+        if ($n['switch'] > 0 && IPS_ObjectExists($n['switch'])) {
+            $parts[] = 'Schalter: ' . IPS_GetName($n['switch']);
+        } elseif (($n['switchNote'] ?? '') !== '') {
+            $parts[] = 'Schalter: mehrdeutig';
         }
         $prefix = ($n['isLink'] ? '🔗 ' : '') . IPS_GetName($n['target']) . ' → ';
         return $prefix . ($parts ? implode(' · ', $parts) : 'nichts gefunden');
@@ -1272,7 +1301,10 @@ class MeterHubVirtual extends IPSModule
             if ($n['broken']) {
                 $warnings[] = "$label: das verknüpfte Ziel existiert nicht mehr — geht mit 0 in die Summe ein. Den Link im Objektbaum löschen oder auf ein vorhandenes Gerät umbiegen.";
             } elseif ($n['power'] <= 0 && $n['imp'] <= 0 && $n['exp'] <= 0) {
-                $warnings[] = "$label: am Ziel wurde weder eine Leistung (W) noch ein Energiezähler (kWh) gefunden — geht mit 0 in die Summe ein. Unten in der Mitglieder-Tabelle lässt sich ein Datenpunkt von Hand zuordnen.";
+                $warnings[] = "$label: am Ziel wurde weder eine Leistung (W) noch ein Energiezähler (kWh) gefunden — geht mit 0 in die Summe ein" . ($n['switch'] > 0 ? ', wird aber mitgeschaltet' : '') . '. Unten in der Mitglieder-Tabelle lässt sich ein Datenpunkt von Hand zuordnen.';
+            }
+            if (($n['switchNote'] ?? '') !== '') {
+                $warnings[] = "$label: Schalter nicht eindeutig — " . $n['switchNote'] . ' (Spalte „Schalter übersteuern", oder „nicht schalten").';
             }
         }
         $anyImp = false;
@@ -1622,6 +1654,18 @@ class MeterHubVirtual extends IPSModule
         }
         if (count($found) === 1) {
             return [$found[0], ''];
+        }
+        // Mehrere Kandidaten: genau EINE mit dem Ident "StatusVariable" ist
+        // die Schaltvariable des Symcon-Z-Wave-Moduls — an 21 Aktoren in
+        // Dietmars Anlage live belegt (Dashboard-Befund 11.09.2026), der
+        // zweite Kandidat dort war "Daten (Boolean)"/DataVariableBoolean.
+        // Eine feste Modul-Konvention, kein Raten; ohne sie (oder bei
+        // mehreren) bleibt es beim Hinweis.
+        if (count($found) > 1) {
+            $status = array_values(array_filter($found, fn($vid) => (string)IPS_GetObject($vid)['ObjectIdent'] === 'StatusVariable'));
+            if (count($status) === 1) {
+                return [$status[0], ''];
+            }
         }
         if (count($found) > 1) {
             return [0, 'mehrere schaltbare Variablen (' . implode(', ', array_map('IPS_GetName', $found)) . ') — bitte in der Spalte „Schalter" von Hand wählen'];
@@ -2352,7 +2396,9 @@ class MeterHubVirtual extends IPSModule
         }
         [$sw, $swNote] = $this->SwitchOfDevice($isVar ? $this->DeviceOf($deviceId)[0] : $deviceId);
         $link = $this->CreateMemberLink($deviceId, $name);
-        $this->StoreMemberSettings([$link => ['Factor' => 100, 'SwitchID' => $sw]]);
+        // Schalter nicht als Übersteuerung speichern — TreeNodes() findet ihn
+        // bei jedem Takt selbst, auch wenn er am Gerät später wechselt.
+        $this->StoreMemberSettings([$link => ['Factor' => 100]]);
         $this->ReloadForm();
 
         $parts   = [];
@@ -3058,7 +3104,10 @@ class MeterHubVirtual extends IPSModule
                 'energyExportID' => $id('energy_export'),
                 'measured'       => true, // Rechenergebnis gemessener Zähler
                 'energyKind'     => 'counter',
-                'sourceCount'    => count($members),
+                // Güte = Zahl der MESSENDEN Mitglieder (Dashboard-Frage
+                // 11.09.2026). Im Baum-Modus kann members[] mehr enthalten:
+                // reine Schalt-Mitglieder ohne Zähler, tote Links.
+                'sourceCount'    => count(array_filter($members, fn($m) => $m['powerID'] > 0 || $m['energyImportID'] > 0 || $m['energyExportID'] > 0)),
                 'members'        => $members,
                 'switchID'       => $groupSwitch,
                 'switchStateID'  => $groupState,
@@ -3233,7 +3282,8 @@ class MeterHubVirtual extends IPSModule
                     ['caption' => 'Leistung übersteuern', 'name' => 'PowerID', 'width' => '200px', 'edit' => ['type' => 'SelectVariable']],
                     ['caption' => 'Bezug übersteuern', 'name' => 'EnergyImportID', 'width' => '200px', 'edit' => ['type' => 'SelectVariable']],
                     ['caption' => 'Einspeisung übersteuern', 'name' => 'EnergyExportID', 'width' => '200px', 'edit' => ['type' => 'SelectVariable']],
-                    ['caption' => 'Schalter (Bool)', 'name' => 'SwitchID', 'width' => '200px', 'edit' => ['type' => 'SelectVariable']],
+                    ['caption' => 'Schalter übersteuern', 'name' => 'SwitchID', 'width' => '200px', 'edit' => ['type' => 'SelectVariable']],
+                    ['caption' => 'nicht schalten', 'name' => 'NoSwitch', 'width' => '110px', 'edit' => ['type' => 'CheckBox']],
                     ['caption' => 'Objekt-ID', 'name' => 'MemberID', 'width' => '90px', 'save' => true],
                 ],
             ];
