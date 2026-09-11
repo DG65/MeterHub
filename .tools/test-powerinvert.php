@@ -55,9 +55,11 @@ class IPSModule
     protected function RegisterPropertyString($n, $v)  { $this->defs[$n] = $v; }
     protected function RegisterPropertyInteger($n, $v) { $this->defs[$n] = $v; }
     protected function RegisterPropertyBoolean($n, $v) { $this->defs[$n] = $v; }
+    protected function RegisterPropertyFloat($n, $v)   { $this->defs[$n] = $v; }
     public function ReadPropertyString($n)  { return (string)($GLOBALS['PROP'][$this->InstanceID][$n] ?? $this->defs[$n] ?? ''); }
     public function ReadPropertyInteger($n) { return (int)($GLOBALS['PROP'][$this->InstanceID][$n] ?? $this->defs[$n] ?? 0); }
     public function ReadPropertyBoolean($n) { return (bool)($GLOBALS['PROP'][$this->InstanceID][$n] ?? $this->defs[$n] ?? false); }
+    public function ReadPropertyFloat($n)   { return (float)($GLOBALS['PROP'][$this->InstanceID][$n] ?? $this->defs[$n] ?? 0.0); }
     protected function RegisterTimer($n, $i, $s) {}
     protected function SetStatus($s) {}
     protected function SetVisualizationType($t) {}
