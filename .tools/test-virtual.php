@@ -1771,14 +1771,30 @@ class T36_FakeHub
     public function SetVarBool($i, $x)  { $this->v[$i] = $x; }
     public function SetVarFloat($i, $x) { $this->v[$i] = $x; }
     public function SetVarInt($i, $x)   { $this->v[$i] = $x; }
-    public function GroupActive($g)     { return false; }
+    public $groups = [];
+    public function GroupActive($g)     { return !empty($this->groups[$g]); }
 }
 $mb36  = new T36_FakeModbus();
-$mb36->regs = [10000 => 0x9AD0, 10001 => 0x490A, 40000 => 0];
+// Echte Rohwörter vom blue'Log .201 (11.09.2026): 10000 = Park-Leistung,
+// 10002 reserviert, 10004/10006 = 31,0 installierte/aktive Wechselrichter
+// (per Modbus-Zählung bestätigt: 31 WR an SCADA 127–157), 10008/10010 NaN
+// (keine Leistungsregelung an diesem XM).
+$raw36 = [10000 => 0x9AD0, 10001 => 0x490A, 10002 => 0xFFFF, 10003 => 0xFFFF,
+          10004 => 0x0000, 10005 => 0x41F8, 10006 => 0x0000, 10007 => 0x41F8,
+          10008 => 0x0000, 10009 => 0x7FC0, 10010 => 0x0000, 10011 => 0x7FC0,
+          10100 => 0x0000, 10101 => 0x42C8, 40000 => 0];
+$mb36->regs = $raw36;
 $hub36 = new T36_FakeHub();
 $drv36 = new MHUB_BlueLogScadaLoggerDriver();
 check('36: Park-Leistung aus den echten Rohwörtern (9AD0 490A, CDAB = 567725 W)', $drv36->readFast($mb36, $hub36) === true && abs(($hub36->v['power_total'] ?? 0) - 567725.0) < 1, json_encode($hub36->v));
 check('36: Gerätetyp 0 = Datenlogger', ($hub36->v['device_type'] ?? -1) === 0);
+check('36: installierte/aktive Wechselrichter = 31/31 (V2.27.0: PPC_INV_INST/PPC_INV_AVAIL)', ($hub36->v['inv_installed'] ?? -1) === 31 && ($hub36->v['inv_active'] ?? -1) === 31, json_encode($hub36->v));
+check('36: Leistungsregelungs-Werte nur mit aktivierter Gruppe', !isset($hub36->v['p_setpoint_rel']) && !isset($hub36->v['q_available']));
+$hub36->groups = ['GroupPpc' => true];
+$hub36->v = [];
+$drv36->readFast($mb36, $hub36);
+check('36: Gruppe aktiv: Sollwert 100 % gelesen, NaN (verfügbare Leistung) nicht geschrieben', ($hub36->v['p_setpoint_rel'] ?? null) === 100.0 && !isset($hub36->v['p_available']) && !isset($hub36->v['q_available']), json_encode($hub36->v));
+$hub36->groups = [];
 $mb36->regs[10000] = 0xFFFF;
 $mb36->regs[10001] = 0xFFFF;
 $hub36->v = [];

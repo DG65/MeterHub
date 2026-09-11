@@ -2376,17 +2376,23 @@ class MHUB_BlueLogScadaMeterDriver implements MHUB_MeterDriverInterface
 // erscheinen, weil die 97 die Zusammenfassung des kompletten Datenloggers
 // darstellt."
 //
-// Registerkarte laut „SCADA Interface Register V2.24.0" (Abschnitt BLUE'LOG):
-// dort ist unter Adresse 97 genau EIN berechneter Wert dokumentiert —
-// 10000 P_AC_INV_SUM, Summe der AC-Leistung aller Wechselrichter, W, F32
-// (ab SCADA 2.17.0; ein blue'Log XC als Master summiert auch die
-// Wechselrichter seiner Slaves). Live am Solarpark gemessen (blue'Log .201,
-// 11.09.2026): 40000 = 0 (Datenlogger), 10000/10001 = 9AD0 490A → CDAB =
-// 567 725 W, übereinstimmend mit Dietmars eigener Symcon-Abfrage derselben
-// Größe (#31777: ModBus Address, FC3, Adresse 10000, Real, ByteOrder 3).
-// 10002 ff. lieferten nur 0xFFFF/NaN, 10004/10006 einen nicht
-// dokumentierten Wert (31) — bewusst NICHT übernommen (erst messen, dann
-// glauben: ohne Doku keine Bedeutung).
+// Registerkarte laut „SCADA Interface Register V2.27.0" (2026-05-29,
+// Abschnitt BLUE'LOG, Help Center → „SCADA Interface blue'Log XM/XC license
+// data sheet"): 10000 P_AC_INV_SUM (Summe der AC-Leistung aller
+// Wechselrichter, W; ein blue'Log XC als Master summiert auch die seiner
+// Slaves), 10004/10006 PPC_INV_INST/PPC_INV_AVAIL (installierte/aktive
+// Wechselrichter), 10008/10010 PPC_P_AC_AVAIL/PPC_Q_AC_AVAIL (verfügbare
+// Wirk-/Blindleistung), 10100 PPC_P_SET_REL (Wirkleistungs-Sollwert, %) —
+// alle F32, ab SCADA 2.25; keine Schreib-Sektion für 97. Die ältere V2.24.0
+// kannte nur 10000.
+//
+// Live gemessen (Solarpark, 11.09.2026): blue'Log .201 (XM-3000): 40000 = 0,
+// 10000/10001 = 9AD0 490A → CDAB = 567 725 W, übereinstimmend mit Dietmars
+// eigener Symcon-Abfrage (#31777: FC3, Adresse 10000, Real, ByteOrder 3);
+// 10004/10006 = 31/31 — per Modbus-Zählung bestätigt (31 Wechselrichter an
+// SCADA-Adresse 127–157); 10008/10010/10100 NaN (keine Leistungsregelung).
+// .212 (XC-10000): 2,40 MW, 276/271 WR, 3,50 MW/3,26 Mvar verfügbar,
+// Sollwert 100 %. .217 (XC-20000): 4,06 MW, 440/432 WR.
 //
 // Kein Zählerstand: die SCADA-Schnittstelle dokumentiert unter 97 keine
 // Energie. Kumulativen Ertrag liefern die einzelnen Wechselrichter (E_TOTAL,
@@ -2400,13 +2406,29 @@ class MHUB_BlueLogScadaLoggerDriver implements MHUB_MeterDriverInterface
     public function getBaseVars()
     {
         return [
-            ['power_total', 'Wirkleistung AC (Summe aller Wechselrichter)', 'F', 'NRG.Watt', true, 'total', 'FC3 10000 (P_AC_INV_SUM, Adresse 97)'],
-            ['device_type', 'Gerätetyp (SCADA-Meldung)', 'I', 'MHB.BlueLogDeviceType', false, 'total', 'FC3 40000'],
-            ['connected',   'Verbindung',                'B', '~Alert.Reversed', false, 'errors', ''],
+            ['power_total',   'Wirkleistung AC (Summe aller Wechselrichter)', 'F', 'NRG.Watt', true,  'total', 'FC3 10000 (P_AC_INV_SUM, Adresse 97)'],
+            // Ab SCADA 2.25 (Doku V2.27.0). Als Ganzzahl ohne Profil — der
+            // Unterschied installiert/aktiv zeigt ausgefallene Wechselrichter.
+            ['inv_installed', 'Wechselrichter installiert',  'I', '', true,  'total', 'FC3 10004 (PPC_INV_INST)'],
+            ['inv_active',    'Wechselrichter aktiv',        'I', '', true,  'total', 'FC3 10006 (PPC_INV_AVAIL)'],
+            ['device_type',   'Gerätetyp (SCADA-Meldung)',   'I', 'MHB.BlueLogDeviceType', false, 'total', 'FC3 40000'],
+            ['connected',     'Verbindung',                  'B', '~Alert.Reversed', false, 'errors', ''],
         ];
     }
 
-    public function getOptionalGroups() { return []; }
+    public function getOptionalGroups()
+    {
+        // Nur bei einem blue'Log mit Leistungsregelung (XC-Master) belegt —
+        // an Dietmars XM-3000 NaN, an den XC-Reglern .212/.217 gefüllt.
+        // Rein lesend: die Doku sieht unter 97 keinen Schreibzugriff vor.
+        return [
+            'GroupPpc' => ['caption' => 'Leistungsregelung (blue\'Log mit Power Control)', 'vars' => [
+                ['p_available',    'Verfügbare Wirkleistung',    'F', 'NRG.Watt',    true, 'power', 'FC3 10008 (PPC_P_AC_AVAIL)'],
+                ['q_available',    'Verfügbare Blindleistung',   'F', 'MHB.var',     true, 'power', 'FC3 10010 (PPC_Q_AC_AVAIL)'],
+                ['p_setpoint_rel', 'Wirkleistungs-Sollwert',     'F', 'NRG.Percent', true, 'power', 'FC3 10100 (PPC_P_SET_REL)'],
+            ]],
+        ];
+    }
 
     public function getProfiles() { return []; }
 
@@ -2418,7 +2440,10 @@ class MHUB_BlueLogScadaLoggerDriver implements MHUB_MeterDriverInterface
     public function readFast($mb, $hub)
     {
         $mb->setWordSwap(true); // blue'Log SCADA: Float32 immer CDAB, live verifiziert
-        $r = $mb->readHolding(10000, 2);
+        // Ein Block 10000..10011 (P_AC_INV_SUM, reserviert, INV_INST,
+        // INV_AVAIL, P_AC_AVAIL, Q_AC_AVAIL) — lückenlos laut Doku, live an
+        // XM-3000 und XC-10000/20000 ohne Fehler gelesen.
+        $r = $mb->readHolding(10000, 12);
         if ($r === null) {
             $hub->SetVarBool('connected', false);
             return false;
@@ -2429,6 +2454,27 @@ class MHUB_BlueLogScadaLoggerDriver implements MHUB_MeterDriverInterface
         $p = $mb->readFloat32($r, 0);
         if (is_finite($p)) {
             $hub->SetVarFloat('power_total', $p);
+        }
+        foreach ([4 => 'inv_installed', 6 => 'inv_active'] as $off => $ident) {
+            $n = $mb->readFloat32($r, $off);
+            if (is_finite($n)) {
+                $hub->SetVarInt($ident, (int)round($n));
+            }
+        }
+        if ($hub->GroupActive('GroupPpc')) {
+            foreach ([8 => 'p_available', 10 => 'q_available'] as $off => $ident) {
+                $v = $mb->readFloat32($r, $off);
+                if (is_finite($v)) {
+                    $hub->SetVarFloat($ident, $v);
+                }
+            }
+            $s = $mb->readHolding(10100, 2);
+            if ($s !== null) {
+                $v = $mb->readFloat32($s, 0);
+                if (is_finite($v)) {
+                    $hub->SetVarFloat('p_setpoint_rel', $v);
+                }
+            }
         }
         $t = $mb->readHolding(40000, 1);
         if ($t !== null) {

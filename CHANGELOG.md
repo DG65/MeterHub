@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.26.3-beta.1 (2026-09-11)
+
+- **🆕 blue'Log-Datenlogger (Adresse 97): Wechselrichter-Anzahl und Leistungsregelung.**
+  Die neue Herstellerdoku „SCADA Interface Register V2.27.0" (2026-05-29, Help Center)
+  beschreibt unter 97 weitere Register, die die ältere V2.24.0 nicht kannte:
+  - Immer: **installierte** (10004) und **aktive Wechselrichter** (10006) — zeigt
+    ausgefallene Wechselrichter auf einen Blick.
+  - Optionale Gruppe „Leistungsregelung": **verfügbare Wirkleistung** (10008),
+    **verfügbare Blindleistung** (10010), **wirksamer Wirkleistungs-Sollwert in %**
+    (10100). Rein lesend — die Doku sieht unter 97 keinen Schreibzugriff vor.
+  - Live an drei blue'Logs im Solarpark geprüft: .201 (XM-3000) 31/31 Wechselrichter —
+    per Modbus-Zählung bestätigt (31 WR an SCADA-Adresse 127–157); .212 (XC-10000)
+    276/271, 3,50 MW/3,26 Mvar verfügbar, Sollwert 100 %; .217 (XC-20000) 440/432.
+    Nicht gelieferte Werte (NaN) werden nicht geschrieben.
+- Prüfstand Block 36 erweitert.
+
 ## 0.26.2-beta.1 (2026-09-11)
 
 - **🆕 blue'Log-Adresse 97 als eigener Zähler.** Dietmars Vorgabe: „Die 97 muss

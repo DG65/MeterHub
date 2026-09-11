@@ -997,10 +997,16 @@ ausgeliefert wird.
   Address" für die *ganze* Anfrage. Daher zwei getrennte Blöcke (1–42, 55–72).
 - **Janitza** — UMG 604/605/509/512/806/96PA/801 teilen sich eine Registerkarte; nur der
   **UMG 800** weicht ab (frei konfigurierbare Werkskarte, Summen an anderer Stelle).
-- **blue'Log SCADA, Adresse 97 (Datenlogger)** — laut „SCADA Interface Register V2.24.0"
-  (`~/Downloads/557009-SCADA-interface_de.pdf`) ist dort nur 10000 `P_AC_INV_SUM` (W, F32)
-  dokumentiert. Live gemessen (Solarpark, blue'Log .201, 11.09.2026): 40000 = 0, 10000 =
-  567 725 W (CDAB), 10002 ff. 0xFFFF/NaN, 10004/10006 = 31 ohne Doku → nicht übernommen.
+- **blue'Log SCADA, Adresse 97 (Datenlogger)** — maßgeblich ist die aktuelle
+  „SCADA Interface Register V2.27.0" (Help Center → blue'Log XM/XC → Data sheets →
+  „SCADA Interface blue'Log XM/XC license data sheet", Datei
+  `557009-SCADA-interface_en_2026-05-29.pdf`, nur Englisch). Die ältere deutsche V2.24.0
+  kannte unter 97 nur 10000 `P_AC_INV_SUM`; V2.27.0 ergänzt 10004/10006 `PPC_INV_INST`/
+  `PPC_INV_AVAIL`, 10008/10010 `PPC_P_AC_AVAIL`/`PPC_Q_AC_AVAIL`, 10100 `PPC_P_SET_REL`
+  (keine Schreib-Sektion für 97). Live gemessen 11.09.2026: .201 XM-3000 31/31 WR (per
+  Modbus-Zählung bestätigt, SCADA 127–157), .212 XC-10000 276/271, .217 XC-20000
+  440/432. Lehre: die „31 ohne Doku" war keine Fantasiezahl — bei unbekannten belegten
+  Registern zuerst die neueste Herstellerdoku holen, statt sie wegzulassen oder zu raten.
   Kein Zählerstand unter 97. Solarpark-Systemprotokoll ist mit „Socket ist nicht
   verbunden"-Warnungen geflutet: eigene `trigger_error`-Ausgaben mit `limit` 60–100 suchen,
   NaN-Werte vor `json_encode` in Text wandeln (sonst leere Ausgabe).
