@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.25.0-beta.1 (2026-09-11)
+
+- **🌳 MeterHubVirtual: Mitglieder direkt im Objektbaum.** Dietmars Anregung: „einen
+  virtuellen Zähler nur durch die Anordnung im Objektbaum zusammenbauen … man würde
+  sehr viel schneller erkennen, welcher Zähler noch existiert, und es gäbe nicht so
+  viele Leichen" — dazu „die Reihenfolge nach deren Einsortierung".
+  - Alles, was direkt unter einer MeterHubVirtual-Instanz hängt — vor allem
+    Verknüpfungen (Links) auf ein Gerät, eine einzelne Variable oder eine andere
+    virtuelle Zähler-Instanz —, ist Mitglied. Reihenfolge = Position im Objektbaum
+    (Symcon liefert Kinder in Anlage-Reihenfolge, das Modul sortiert selbst).
+  - Leistung/Bezug/Einspeisung werden bei jedem Takt frisch am Ziel gefunden; je
+    Mitglied lassen sich Anteil, Rolle (bei Link auf eine Variable), einzelne
+    Datenpunkte und der Schalter in einer Mitglieder-Tabelle übersteuern.
+  - Hinzufügen, Entfernen, Umsortieren und Umbenennen im Objektbaum wirken ohne
+    „Übernehmen": das Modul hört auf die Objektbaum-Meldungen und prüft zusätzlich
+    bei jedem Berechnungstakt einen Fingerabdruck der Mitglieder.
+  - Ein Link, dessen Ziel gelöscht wurde, erscheint als ⚠️ „Ziel fehlt" und geht mit 0
+    ein — keine stillen Leichen mehr. Selbstbezug, Rückkopplung auf eine eigene
+    Ausgabe und Kreisverweise über verschachtelte Instanzen (A enthält B enthält A)
+    werden blockiert; vorhandene Ausgaben bleiben dabei erhalten.
+  - Verschachteln: einen Link auf eine andere virtuelle Zähler-Instanz unterhängen
+    (z. B. mehrere Wallbox-Zähler unter „Fahrzeugbeladung").
+  - Sucher-, Quick-Pick- und Familien-Alternative legen im Baum-Modus Links an
+    (Familie: dieselbe Verdrahtung inkl. −100 für P23 wie bisher, nur als Objekte);
+    „Energie hochrechnen" und „Schalter suchen" arbeiten auf der Mitglieder-Tabelle.
+  - Neue Instanzen starten im Baum-Modus. Instanzen mit der bisherigen Tabelle
+    rechnen unverändert weiter; ein Panel bietet „In Objektbaum-Mitglieder
+    umwandeln" an (`MHUBV_ConvertToTree`) — nur auf Knopfdruck, rechnerisch identisch
+    (Link aufs Gerät, wenn es genau diese Datenpunkte liefert, sonst auf die
+    Variable mit festgehaltener Zuordnung), die alte Tabelle wird gesichert.
+  - WebFront-Kachel: im Baum-Modus Name/Anteil änderbar, Entfernen nur im Objektbaum.
+  - Prüfstand `.tools/test-virtual.php` Block 35 (Reihenfolge, Summen, Anteile,
+    Nachführung, tote Links, Selbstbezug, Kreisverweis, Verschachtelung,
+    Variablen-Links, AddDevice, Hochrechnen, Formular-Liste, Umwandlung).
+
 ## 0.24.47-beta.1 (2026-09-09)
 
 - **🔧 Kernursache gefunden und behoben: blue'Log verkraftet keine schnelle

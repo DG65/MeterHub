@@ -862,6 +862,48 @@ gegen #16933 im neuen Modell, `GetFunctions()` mit Instanz-Funktion, Migrations-
 Vorschlag-im-Formular und erfolgreicher Bestätigung, Kreuz-Instanz-Suchlauf-Ausschluss und der
 „nur schon verwendet"-Schalter.
 
+## MeterHubVirtual: Mitglieder aus dem Objektbaum (0.25.0, 11.09.2026)
+
+**Auslöser:** Dietmars Anregung, einen virtuellen Zähler allein über die Anordnung im
+Objektbaum zu bauen („es gäbe nicht so viele Leichen"), Reihenfolge nach Einsortierung,
+und Wallboxen mit virtuellen Zählern verschachteln zu können.
+
+**Modus-Wahl (`MemberSource`):** `''` = automatisch (keine Tabellenzeilen → Baum, sonst
+Tabelle), `'tree'`, `'list'`. Bewusst kein Pflichtfeld: bestehende Instanzen rechnen
+unverändert weiter, neue starten ohne Zutun im Baum. Umstellung nur per Knopf
+(`ConvertToTree()`), nie still — alte Tabelle landet im Attribut `NodesBackup`.
+
+**Live verifiziert (Dietmars Anlage, 11.09.2026):** Links dürfen Kinder einer Instanz
+sein; `IPS_GetChildrenIDs()` liefert **Anlage-Reihenfolge**, nicht Position → Modul
+sortiert selbst (`ObjectPosition`, dann Name). Meldungs-Konstanten OM_CHILDADDED 10412,
+OM_CHILDREMOVED 10413, OM_CHANGEPOSITION 10408, OM_CHANGENAME 10404, OM_UNREGISTER
+10402, LM_CHANGETARGET 11003. **Absender dieser Meldungen ist nicht dokumentiert** —
+daher Abos auf Instanz, jedes Mitglied und jedes Ziel (`SyncTreeWatch()`), und
+zusätzlich Fingerabdruck-Vergleich in `Recalc()` als Sicherheitsnetz. Noch offen: live
+im Debug nachsehen, welche Meldungen tatsächlich ankommen.
+
+**Datenmodell:** `TreeNodes()` liefert dieselbe Zeilenform wie `Nodes()` plus
+`member/isLink/target/broken`; `Nodes()` verzweigt dorthin — alle Rechen-, Prüf- und
+Vertragspfade (Recalc, Warnings, GetFunctions, Schaltgruppe) bleiben gemeinsam.
+`MemberSettings` (Property) hält je Mitglied nur Übersteuerungen (Anteil, Rolle,
+Datenpunkte, Schalter), Schlüssel `MemberID`; Datenpunkte werden sonst bei jedem Takt
+frisch am Ziel aufgelöst, nicht eingefroren.
+
+**Formular-Liste:** `loadValuesFromConfiguration: false` + `values` aus dem Baum, laut
+SDK-Doku lädt eine property-gebundene Liste sonst ZUERST die gespeicherten Zeilen (nach
+einer Baum-Änderung stünden veraltete Zeilen daneben). Nicht editierbare Spalten werden
+nur mit `save: true` gespeichert → `MemberID` hat `save: true`; ersatzweise ordnet
+`MemberSettingsMap()` nach Zeilen-Position zu (Liste hat kein add/delete/changeOrder).
+
+**Blockierend** (`TreeErrors()`): Selbstbezug, Mitglied liefert eigene Ausgabe, Kreisverweis
+über verschachtelte Instanzen (`ReferencesInstance()`, beide Mitglieder-Quellen, Tiefe
+10). **Nur Warnung:** toter Link, Mitglied ohne gefundenen Datenpunkt.
+
+**Prüfstand-Lehre:** Block 9 legt absichtlich ein „fremdes" `NRG.Watt` (Suffix FREMD) an —
+spätere Blöcke, die verschachtelte Instanzen gegen echte Zähler prüfen, müssen die
+Profile zurücksetzen, sonst meldet die Einheiten-Prüfung W vs. FREMD. Blöcke 1–34
+laufen per `LEGACY_LIST` im Tabellen-Modus.
+
 ## Parallele Sitzungen: Zuständigkeiten
 
 An beiden Repos wird teilweise **gleichzeitig in getrennten Sitzungen** gearbeitet. Beide

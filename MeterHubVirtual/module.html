@@ -111,6 +111,8 @@
     NEUE Zeile hinzufügen oder eine Variable neu zuweisen geht weiterhin nur im
     Konsolenformular — dort übernimmt Symcons eingebauter Variablenpicker die Auswahl aus
     dem ganzen Objektbaum, das lässt sich hier nicht gleichwertig nachbauen.
+    Nutzt die Instanz den Objektbaum als Mitglieder-Quelle (🔗), werden Mitglieder dort
+    hinzugefügt, entfernt und umsortiert — hier bleiben Name und Anteil änderbar.
   </div>
 
 <script>
@@ -173,7 +175,9 @@ function renderTable() {
       + '<td class="term">' + termCell(row.powerName, row.powerVal, row.powerId, 'W') + '</td>'
       + '<td class="term">' + termCell(row.impName, row.impVal, row.impId, 'kWh') + '</td>'
       + '<td class="term">' + termCell(row.expName, row.expVal, row.expId, 'kWh') + '</td>'
-      + '<td class="row-actions"><button class="danger-ghost" onclick="deleteRow(' + idx + ')">🗑</button></td>'
+      + '<td class="row-actions">' + (PAYLOAD && PAYLOAD.tree
+          ? '<span class="empty-hint" title="Mitglieder werden im Objektbaum entfernt (Link löschen)">🔗</span>'
+          : '<button class="danger-ghost" onclick="deleteRow(' + idx + ')">🗑</button>') + '</td>'
       + '</tr>';
   });
   html += '</tbody></table>';

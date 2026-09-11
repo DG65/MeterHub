@@ -22,9 +22,33 @@ $GLOBALS['NEXTID'] = 9000;
 $GLOBALS['FORMFIELDS'] = [];
 
 function obj($id, $type, $name, $parent, $ident = '') {
-    $GLOBALS['OBJ'][$id] = ['ObjectType' => $type, 'ObjectIdent' => $ident, 'ObjectName' => $name, 'ParentID' => $parent];
+    $GLOBALS['OBJ'][$id] = ['ObjectType' => $type, 'ObjectIdent' => $ident, 'ObjectName' => $name, 'ParentID' => $parent, 'ObjectPosition' => 0];
     return $id;
 }
+
+// Objektbaum-Modus (0.25.0): Meldungs-Konstanten live an Dietmars Anlage
+// abgelesen (11.09.2026), Links als ObjectType 6.
+const OM_UNREGISTER = 10402;
+const OM_CHANGENAME = 10404;
+const OM_CHANGEPOSITION = 10408;
+const OM_CHILDADDED = 10412;
+const OM_CHILDREMOVED = 10413;
+const LM_CHANGETARGET = 11003;
+$GLOBALS['LINKS'] = [];
+function IPS_CreateLink() {
+    $id = $GLOBALS['NEXTID']++;
+    obj($id, 6, 'Verknüpfung', 0);
+    $GLOBALS['LINKS'][$id] = 0;
+    return $id;
+}
+function IPS_SetLinkTargetID($id, $t) { $GLOBALS['LINKS'][$id] = $t; return true; }
+function IPS_GetLink($id) { return isset($GLOBALS['LINKS'][$id]) ? ['TargetID' => $GLOBALS['LINKS'][$id]] : false; }
+function IPS_DeleteLink($id) { unset($GLOBALS['OBJ'][$id], $GLOBALS['LINKS'][$id]); return true; }
+// Bisherige Blöcke 1–34 prüfen die Tabellen-Mitglieder. Seit 0.25.0 startet
+// eine Instanz ohne Tabellenzeilen im Objektbaum-Modus — die alten Blöcke
+// halten deshalb ausdrücklich an der Tabelle fest (MemberSource='list');
+// Block 35 schaltet das ab und prüft den echten Standard.
+$GLOBALS['LEGACY_LIST'] = true;
 function vari($id, $name, $parent, $ident, $profile, $value, $age = 0, $type = 2, $action = 0) {
     obj($id, 2, $name, $parent, $ident);
     // $type: 0=Bool 1=Int 2=Float; $action > 0 = Variable hat eine Aktion
@@ -46,7 +70,7 @@ function IPS_GetParent($id)       { return $GLOBALS['OBJ'][$id]['ParentID'] ?? 0
 function IPS_SetName($id, $n)     { $GLOBALS['OBJ'][$id]['ObjectName'] = $n; }
 function IPS_SetParent($id, $p)   { $GLOBALS['OBJ'][$id]['ParentID'] = $p; }
 function IPS_SetIdent($id, $i)    { $GLOBALS['OBJ'][$id]['ObjectIdent'] = $i; }
-function IPS_SetPosition($id, $p) {}
+function IPS_SetPosition($id, $p) { $GLOBALS['OBJ'][$id]['ObjectPosition'] = $p; }
 function IPS_SetInfo($id, $text)  { $GLOBALS['OBJ'][$id]['ObjectInfo'] = $text; }
 function IPS_GetVariableList()    { return array_keys($GLOBALS['VAR']); }
 function GetValue($id)            { return $GLOBALS['VAL'][$id] ?? 0; }
@@ -163,7 +187,12 @@ class IPSModule
 {
     public $InstanceID;
     protected $defs = [];
-    public function __construct($id) { $this->InstanceID = $id; }
+    public function __construct($id) {
+        $this->InstanceID = $id;
+        if ($GLOBALS['LEGACY_LIST'] && !isset($GLOBALS['PROP'][$id]['MemberSource'])) {
+            $GLOBALS['PROP'][$id]['MemberSource'] = 'list';
+        }
+    }
     public function Create() {}
     public function ApplyChanges() {}
     protected function RegisterPropertyString($n, $v)  { $this->defs[$n] = $v; }
@@ -179,7 +208,8 @@ class IPSModule
     protected function SetStatus($s) { $GLOBALS['STATUS'][$this->InstanceID] = $s; }
     public function GetStatus() { return $GLOBALS['STATUS'][$this->InstanceID] ?? 0; }
     protected function SetVisualizationType($t) {}
-    protected function RegisterMessage($senderID, $message) {}
+    protected function RegisterMessage($senderID, $message) { $GLOBALS['MSGS'][$this->InstanceID][$senderID . ':' . $message] = true; }
+    protected function UnregisterMessage($senderID, $message) { unset($GLOBALS['MSGS'][$this->InstanceID][$senderID . ':' . $message]); }
     protected function EnableAction($ident) { $GLOBALS['ENABLED_ACTIONS'][$this->InstanceID][$ident] = true; }
     protected function SendDebug($sender, $msg, $format) {}
     public function UpdateFormField($f, $p, $v) { $GLOBALS['FORMFIELDS'][$f][$p] = $v; }
@@ -1402,6 +1432,183 @@ $resFind = $lichtOG->FindSwitches(json_encode($altRows));
 check('34h: Ergebnistext meldet einen gefundenen Schalter', str_contains($resFind, '1 Schalter gefunden'), $resFind);
 $rowsAfterFind = json_decode($GLOBALS['FORMFIELDS']['Nodes']['values'] ?? '[]', true);
 check('34h: SwitchID in der offenen Maske nachgetragen', ($rowsAfterFind[0]['SwitchID'] ?? 0) === 3053, json_encode($rowsAfterFind));
+
+echo "\n35) Objektbaum als Mitglieder-Quelle (0.25.0, Dietmars Anregung 11.09.2026: \"nur durch die Anordnung im Objektbaum zusammenbauen … Reihenfolge nach Einsortierung\")\n";
+$GLOBALS['LEGACY_LIST'] = false;
+// Block 9 legt absichtlich ein „fremdes" NRG.Watt/NRG.kWh an (Suffix
+// FREMD) — hier wieder echte Einheiten, sonst meldet die Einheiten-Prüfung
+// für jede verschachtelte Instanz W vs. FREMD.
+$GLOBALS['PROFILES']['NRG.Watt'] = ['Digits' => 0, 'Suffix' => ' W'];
+$GLOBALS['PROFILES']['NRG.kWh'] = ['Digits' => 1, 'Suffix' => ' kWh'];
+const T35_GV = '{ADF18291-2E60-4354-92F5-B96863C127C8}';
+function t35_link($parent, $target, $name, $pos) {
+    $l = IPS_CreateLink();
+    IPS_SetName($l, $name);
+    IPS_SetLinkTargetID($l, $target);
+    IPS_SetParent($l, $parent);
+    IPS_SetPosition($l, $pos);
+    return $l;
+}
+function t35_apply($iid) { IPS_ApplyChanges($iid); return $GLOBALS['MODOBJ'][$iid]; }
+function t35_out($iid, $ident) { $v = IPS_GetObjectIDByIdent($ident, $iid); return $v ? GetValue($v) : null; }
+function t35_call($obj, $method, ...$args) { return (new ReflectionMethod('MeterHubVirtual', $method))->invoke($obj, ...$args); }
+function t35_names($obj) { return array_column(t35_call($obj, 'Nodes'), 'name'); }
+function t35_find($els, $name) {
+    foreach ((array)$els as $e) {
+        if (is_array($e)) {
+            if (($e['name'] ?? null) === $name) { return $e; }
+            $r = t35_find($e, $name);
+            if ($r !== null) { return $r; }
+        }
+    }
+    return null;
+}
+check('35: Test-IDs 4700/4800 frei', !IPS_ObjectExists(4700) && !IPS_ObjectExists(4800) && !IPS_ObjectExists(4801));
+
+echo "  35a) neue Instanz ohne Tabellenzeilen startet im Objektbaum-Modus\n";
+$aIid = IPS_CreateInstance(T35_GV);
+IPS_SetParent($aIid, 10);
+IPS_SetName($aIid, 'Fahrzeugbeladung');
+$a = t35_apply($aIid);
+check('35a: IsTreeMode() ohne jede Einstellung', t35_call($a, 'IsTreeMode') === true);
+check('35a: leer ist kein Fehler (Status 102)', ($GLOBALS['STATUS'][$aIid] ?? 0) === 102, (string)($GLOBALS['STATUS'][$aIid] ?? ''));
+
+echo "  35b) Links in falscher Anlage-Reihenfolge — Mitglieder folgen der Position, Summen stimmen\n";
+$lWb = t35_link($aIid, 300, 'Wallbox', 200);     // zuerst angelegt, aber weiter hinten
+$lWp = t35_link($aIid, 200, 'Wärmepumpe', 110);
+$a = t35_apply($aIid);
+check('35b: Reihenfolge nach Position, nicht nach Anlage', t35_names($a) === ['Wärmepumpe', 'Wallbox'], json_encode(t35_names($a)));
+check('35b: Leistung = 1200 + 1800', abs((float)t35_out($aIid, 'power') - 3000.0) < 0.01, (string)t35_out($aIid, 'power'));
+check('35b: Bezug = 9000 + 5000', abs((float)t35_out($aIid, 'energy_import') - 14000.0) < 0.01, (string)t35_out($aIid, 'energy_import'));
+$msgs = array_keys($GLOBALS['MSGS'][$aIid] ?? []);
+check('35b: Kind-Meldungen an der Instanz abonniert', in_array("$aIid:" . OM_CHILDADDED, $msgs, true) && in_array("$aIid:" . OM_CHILDREMOVED, $msgs, true), json_encode($msgs));
+check('35b: Position/Name/Ziel des Links und Löschen des Ziels abonniert', in_array("$lWb:" . OM_CHANGEPOSITION, $msgs, true) && in_array("$lWb:" . LM_CHANGETARGET, $msgs, true) && in_array('300:' . OM_UNREGISTER, $msgs, true), json_encode($msgs));
+
+echo "  35c) Anteil über die Mitglieder-Einstellungen — per MemberID und ersatzweise per Zeilen-Position\n";
+IPS_SetProperty($aIid, 'MemberSettings', json_encode([['MemberID' => $lWp, 'Factor' => 50]]));
+$a = t35_apply($aIid);
+check('35c: Wärmepumpe zur Hälfte (600 + 1800)', abs((float)t35_out($aIid, 'power') - 2400.0) < 0.01, (string)t35_out($aIid, 'power'));
+IPS_SetProperty($aIid, 'MemberSettings', json_encode([['Factor' => 100], ['Factor' => -100]]));
+$a = t35_apply($aIid);
+check('35c: ohne MemberID gilt die Zeilen-Position (1200 − 1800)', abs((float)t35_out($aIid, 'power') + 600.0) < 0.01, (string)t35_out($aIid, 'power'));
+IPS_SetProperty($aIid, 'MemberSettings', '[]');
+$a = t35_apply($aIid);
+
+echo "  35d) Umsortieren/Umbenennen im Objektbaum wird ohne \"Übernehmen\" nachgeführt\n";
+IPS_SetPosition($lWb, 100);
+$recalcMsg = $a->Recalc();
+check('35d: Recalc() erkennt die neue Position und wendet neu an', str_contains($recalcMsg, 'neu übernommen'), $recalcMsg);
+check('35d: jetzt Wallbox vorn', t35_names($a) === ['Wallbox', 'Wärmepumpe'], json_encode(t35_names($a)));
+IPS_SetName($lWb, 'Wallbox Garage');
+$a->MessageSink(time(), $lWb, OM_CHANGENAME, []);
+check('35d: MessageSink() übernimmt den neuen Namen (Fingerabdruck aktuell)', $a->ReadAttributeString('TreeSignature') === t35_call($a, 'TreeSignature', t35_call($a, 'Nodes')));
+$sigBefore = $a->ReadAttributeString('TreeSignature');
+$a->MessageSink(time(), 424242, OM_CHANGENAME, []);
+check('35d: fremde Meldung ohne Änderung lässt alles, wie es ist', $a->ReadAttributeString('TreeSignature') === $sigBefore);
+
+echo "  35e) toter Link: Warnung statt Fehler, erscheint als \"Ziel fehlt\"\n";
+$lDead = t35_link($aIid, 999999, 'Altes Gerät', 300);
+$a = t35_apply($aIid);
+check('35e: kein Fehler, rechnet weiter (102)', ($GLOBALS['STATUS'][$aIid] ?? 0) === 102, json_encode(t35_call($a, 'Validate')));
+$warn35 = implode(' | ', t35_call($a, 'Warnings', t35_call($a, 'Nodes')));
+check('35e: Warnung nennt das Mitglied und „existiert nicht mehr"', str_contains($warn35, 'Altes Gerät') && str_contains($warn35, 'existiert nicht mehr'), $warn35);
+$form35 = json_decode($a->GetConfigurationForm(), true);
+$list35 = t35_find($form35, 'MemberSettings');
+$found35 = array_column($list35['values'] ?? [], 'Found');
+check('35e: Formular-Liste zeigt „Ziel fehlt"', count(array_filter($found35, fn($f) => str_contains($f, 'Ziel fehlt'))) === 1, json_encode($found35));
+check('35e: Liste lädt nicht die gespeicherten Zeilen, MemberID wird mitgespeichert', ($list35['loadValuesFromConfiguration'] ?? true) === false
+    && in_array(['caption' => 'Objekt-ID', 'name' => 'MemberID', 'width' => '90px', 'save' => true], $list35['columns'] ?? [], true));
+check('35e: kein Hinzufügen/Löschen in der Liste (das passiert im Objektbaum)', ($list35['add'] ?? true) === false && ($list35['delete'] ?? true) === false);
+check('35e: Formel-Tabelle „Nodes" gibt es im Baum-Modus nicht', t35_find($form35, 'Nodes') === null);
+IPS_DeleteLink($lDead);
+$a = t35_apply($aIid);
+check('35e: nach dem Löschen sind die Abos des Links gelöst', !isset($GLOBALS['MSGS'][$aIid]["$lDead:" . OM_CHANGEPOSITION]));
+
+echo "  35f) Selbstbezug blockiert, Ausgaben bleiben erhalten\n";
+$powerVid35 = IPS_GetObjectIDByIdent('power', $aIid);
+$lSelf = t35_link($aIid, $aIid, 'Ich selbst', 400);
+$a = t35_apply($aIid);
+check('35f: Fehlerstatus 201 mit Begründung', ($GLOBALS['STATUS'][$aIid] ?? 0) === 201 && str_contains(implode(' ', t35_call($a, 'Validate')), 'diese Instanz selbst'), json_encode(t35_call($a, 'Validate')));
+check('35f: Ausgabevariable nicht gelöscht', IPS_GetObjectIDByIdent('power', $aIid) === $powerVid35);
+IPS_DeleteLink($lSelf);
+$a = t35_apply($aIid);
+check('35f: nach Entfernen wieder aktiv', ($GLOBALS['STATUS'][$aIid] ?? 0) === 102);
+
+echo "  35g) Verschachteln: virtueller Zähler als Mitglied; Kreisverweis wird abgelehnt bzw. blockiert\n";
+$bIid = IPS_CreateInstance(T35_GV);
+IPS_SetParent($bIid, 10);
+IPS_SetName($bIid, 'Hausanschluss virtuell');
+t35_link($bIid, 100, 'Hausanschluss', 100);
+t35_apply($bIid);
+check('35g: B rechnet den Hausanschluss durch (5000 W)', abs((float)t35_out($bIid, 'power') - 5000.0) < 0.01, (string)t35_out($bIid, 'power'));
+$lBA = t35_link($bIid, $aIid, 'Fahrzeugbeladung', 110);   // B enthält jetzt A
+t35_apply($bIid);
+$res35 = $a->AddDevice($bIid);
+check('35g: AddDevice(B) in A wird als Kreisverweis abgelehnt, kein Link angelegt', str_contains($res35, 'Kreisverweis') && count(t35_call($a, 'TreeMembers')) === 2, $res35);
+$lAB = t35_link($aIid, $bIid, 'Hausanschluss virtuell', 300);  // von Hand trotzdem angelegt
+$a = t35_apply($aIid);
+check('35g: Kreisverweis blockiert (201)', ($GLOBALS['STATUS'][$aIid] ?? 0) === 201 && str_contains(implode(' ', t35_call($a, 'Validate')), 'Kreisverweis'), json_encode(t35_call($a, 'Validate')));
+IPS_DeleteLink($lBA);
+t35_apply($bIid);
+$a = t35_apply($aIid);
+check('35g: ohne Rückweg rechnet A die verschachtelte Instanz mit (1800 + 1200 + 5000)', ($GLOBALS['STATUS'][$aIid] ?? 0) === 102 && abs((float)t35_out($aIid, 'power') - 8000.0) < 0.01, (string)t35_out($aIid, 'power'));
+check('35g: members[] nennt die verschachtelte Instanz als Mitglied', in_array('Hausanschluss virtuell', array_column(json_decode($a->GetFunctions(), true)['members'] ?? [], 'name'), true));
+
+echo "  35h) Link auf eine einzelne Variable: Rolle automatisch bzw. aus den Einstellungen\n";
+vari(4800, 'Zwischenstecker Leistung', 10, '', 'MHB.W', 250.0);
+vari(4801, 'Rohwert ohne Einheit', 10, '', '', 7.0);
+$lVarP = t35_link($aIid, 4800, 'Zwischenstecker', 500);
+$lVarX = t35_link($aIid, 4801, 'Rohwert', 510);
+IPS_SetProperty($aIid, 'MemberSettings', json_encode([['MemberID' => $lVarX, 'Role' => 'exp']]));
+$a = t35_apply($aIid);
+check('35h: W-Variable automatisch als Leistung (+250)', abs((float)t35_out($aIid, 'power') - 8250.0) < 0.01, (string)t35_out($aIid, 'power'));
+check('35h: Variable ohne Einheit per Rolle als Einspeisung (8000 + 7)', abs((float)t35_out($aIid, 'energy_export') - 8007.0) < 0.01, (string)t35_out($aIid, 'energy_export'));
+$warn35h = implode(' | ', t35_call($a, 'Warnings', t35_call($a, 'Nodes')));
+check('35h: keine „Leistung ohne Bezug"-Warnung für einen Einzel-Variablen-Link', !str_contains($warn35h, 'Zwischenstecker'), $warn35h);
+
+echo "  35i) AddDevice() legt einen Link am Ende an und lehnt Doppelte ab\n";
+meter(4700, 'Garage', 700.0, 3000.0);
+$resAdd = $a->AddDevice(4700);
+$a = $GLOBALS['MODOBJ'][$aIid];
+$members35 = t35_call($a, 'TreeMembers');
+$last35 = end($members35);
+check('35i: Link auf das Gerät angelegt, als letztes Mitglied', str_contains($resAdd, 'als Mitglied verknüpft') && $last35['target'] === 4700 && $last35['isLink'], $resAdd);
+check('35i: sofort wirksam (Leistung + 700)', abs((float)t35_out($aIid, 'power') - 8950.0) < 0.01, (string)t35_out($aIid, 'power'));
+$resDup = $a->AddDevice(4700);
+check('35i: zweites Mal abgelehnt, kein zweiter Link', str_contains($resDup, 'bereits Mitglied') && count(t35_call($a, 'TreeMembers')) === count($members35), $resDup);
+check('35i: vorhandene Rolle-Einstellung blieb beim Speichern erhalten', abs((float)t35_out($aIid, 'energy_export') - 8007.0) < 0.01, (string)t35_out($aIid, 'energy_export'));
+
+echo "  35j) Hochrechnen im Baum-Modus arbeitet auf der offenen Mitglieder-Tabelle\n";
+$GLOBALS['FORMFIELDS'] = [];
+$resCalc = $a->AddCalculatedEnergy(json_encode(t35_call($a, 'TreeFormRows')));
+$calcRows = json_decode($GLOBALS['FORMFIELDS']['MemberSettings']['values'] ?? '[]', true);
+$calcRow = array_values(array_filter($calcRows, fn($r) => $r['MemberID'] === $lVarP))[0] ?? [];
+$calcVid = IPS_GetObjectIDByIdent('calc_energy_4800', $aIid);
+check('35j: Zwischenstecker bekommt eine hochgerechnete Bezugs-Variable als Übersteuerung', $calcVid && ($calcRow['EnergyImportID'] ?? 0) === $calcVid, $resCalc . ' ' . json_encode($calcRow));
+check('35j: hochgerechnete Variable (Ident) zählt nicht als Mitglied', !in_array($calcVid, array_column(t35_call($a, 'TreeMembers'), 'member'), true));
+
+echo "  35k) Tabellen-Instanz bleibt Tabelle; ConvertToTree() liefert rechnerisch dasselbe\n";
+$cIid = IPS_CreateInstance(T35_GV);
+IPS_SetParent($cIid, 10);
+IPS_SetProperty($cIid, 'Nodes', json_encode([
+    ['Name' => 'Wärmepumpe', 'Factor' => 100, 'PowerID' => 203, 'EnergyImportID' => 204, 'EnergyExportID' => 0, 'SwitchID' => 0],
+    ['Name' => 'Halbe Wallbox', 'Factor' => -50, 'PowerID' => 303, 'EnergyImportID' => 0, 'EnergyExportID' => 0, 'SwitchID' => 0],
+]));
+$c = t35_apply($cIid);
+check('35k: Instanz mit Zeilen bleibt im Tabellen-Modus', t35_call($c, 'IsTreeMode') === false);
+$formC = json_decode($c->GetConfigurationForm(), true);
+check('35k: Umstell-Angebot sichtbar', t35_find($formC, 'TreeOfferPanel') !== null);
+$beforeP = (float)t35_out($cIid, 'power');
+$beforeI = (float)t35_out($cIid, 'energy_import');
+$resConv = $c->ConvertToTree();
+$c = $GLOBALS['MODOBJ'][$cIid];
+check('35k: Umstellung gemeldet (1 aufs Gerät, 1 auf Variable)', str_contains($resConv, '1 aufs Gerät, 1 auf eine einzelne Variable'), $resConv);
+check('35k: jetzt Baum-Modus, Tabelle leer, Sicherung vorhanden', t35_call($c, 'IsTreeMode') === true && IPS_GetProperty($cIid, 'Nodes') === '[]' && $c->ReadAttributeString('NodesBackup') !== '');
+$mC = t35_call($c, 'TreeMembers');
+check('35k: erster Link aufs Gerät (exakte Übereinstimmung), zweiter auf die Variable', ($mC[0]['target'] ?? 0) === 200 && ($mC[1]['target'] ?? 0) === 303, json_encode($mC));
+check('35k: Leistung unverändert (1200 − 900)', abs((float)t35_out($cIid, 'power') - $beforeP) < 0.01 && abs($beforeP - 300.0) < 0.01, "$beforeP → " . t35_out($cIid, 'power'));
+check('35k: Bezug unverändert', abs((float)t35_out($cIid, 'energy_import') - $beforeI) < 0.01, "$beforeI → " . t35_out($cIid, 'energy_import'));
+check('35k: zweiter Aufruf ändert nichts', str_contains($c->ConvertToTree(), 'bereits'));
 
 echo "\n" . ($fails === 0 ? "ALLE PRÜFUNGEN BESTANDEN\n" : "$fails PRÜFUNG(EN) FEHLGESCHLAGEN\n");
 exit($fails === 0 ? 0 : 1);
