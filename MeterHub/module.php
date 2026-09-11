@@ -2370,6 +2370,80 @@ class MHUB_BlueLogScadaMeterDriver implements MHUB_MeterDriverInterface
 }
 
 // ---------------------------------------------------------------------------
+// MHUB_BlueLogScadaLoggerDriver — Meteocontrol blue'Log, SCADA-Schnittstelle,
+// Adresse 97: das blue'Log selbst (Gerätetyp 0 = Datenlogger) mit seinen
+// berechneten Werten. Dietmars Vorgabe 11.09.2026: „Die 97 muss definitiv
+// erscheinen, weil die 97 die Zusammenfassung des kompletten Datenloggers
+// darstellt."
+//
+// Registerkarte laut „SCADA Interface Register V2.24.0" (Abschnitt BLUE'LOG):
+// dort ist unter Adresse 97 genau EIN berechneter Wert dokumentiert —
+// 10000 P_AC_INV_SUM, Summe der AC-Leistung aller Wechselrichter, W, F32
+// (ab SCADA 2.17.0; ein blue'Log XC als Master summiert auch die
+// Wechselrichter seiner Slaves). Live am Solarpark gemessen (blue'Log .201,
+// 11.09.2026): 40000 = 0 (Datenlogger), 10000/10001 = 9AD0 490A → CDAB =
+// 567 725 W, übereinstimmend mit Dietmars eigener Symcon-Abfrage derselben
+// Größe (#31777: ModBus Address, FC3, Adresse 10000, Real, ByteOrder 3).
+// 10002 ff. lieferten nur 0xFFFF/NaN, 10004/10006 einen nicht
+// dokumentierten Wert (31) — bewusst NICHT übernommen (erst messen, dann
+// glauben: ohne Doku keine Bedeutung).
+//
+// Kein Zählerstand: die SCADA-Schnittstelle dokumentiert unter 97 keine
+// Energie. Kumulativen Ertrag liefern die einzelnen Wechselrichter (E_TOTAL,
+// siehe MHUB_BlueLogScadaInverterDriver) — z. B. per MeterHubVirtual
+// summieren. Rein lesend; Power Control/RPC bleiben eigene, bewusst von Hand
+// anzulegende Zählertypen (keine zwei Schreiber).
+// ---------------------------------------------------------------------------
+
+class MHUB_BlueLogScadaLoggerDriver implements MHUB_MeterDriverInterface
+{
+    public function getBaseVars()
+    {
+        return [
+            ['power_total', 'Wirkleistung AC (Summe aller Wechselrichter)', 'F', 'NRG.Watt', true, 'total', 'FC3 10000 (P_AC_INV_SUM, Adresse 97)'],
+            ['device_type', 'Gerätetyp (SCADA-Meldung)', 'I', 'MHB.BlueLogDeviceType', false, 'total', 'FC3 40000'],
+            ['connected',   'Verbindung',                'B', '~Alert.Reversed', false, 'errors', ''],
+        ];
+    }
+
+    public function getOptionalGroups() { return []; }
+
+    public function getProfiles() { return []; }
+
+    public function getEnumProfiles()
+    {
+        return ['MHB.BlueLogDeviceType' => MHUB_BlueLogScadaInverterDriver::DEVICE_TYPE_ENUM];
+    }
+
+    public function readFast($mb, $hub)
+    {
+        $mb->setWordSwap(true); // blue'Log SCADA: Float32 immer CDAB, live verifiziert
+        $r = $mb->readHolding(10000, 2);
+        if ($r === null) {
+            $hub->SetVarBool('connected', false);
+            return false;
+        }
+        $hub->SetVarBool('connected', true);
+        // Fehlender Wert = 0xFFFFFFFF bzw. 0x7FC00000 (NaN) laut Datenblatt —
+        // nicht als Zahl schreiben, der letzte gültige Wert bleibt stehen.
+        $p = $mb->readFloat32($r, 0);
+        if (is_finite($p)) {
+            $hub->SetVarFloat('power_total', $p);
+        }
+        $t = $mb->readHolding(40000, 1);
+        if ($t !== null) {
+            $hub->SetVarInt('device_type', $mb->u16($t, 0));
+        }
+        return true;
+    }
+
+    // Kein dokumentierter Zählerstand unter Adresse 97 (siehe oben).
+    public function readSlow($mb, $hub)
+    {
+    }
+}
+
+// ---------------------------------------------------------------------------
 // MHUB_BlueLogRpcDriver — Meteocontrol blue'Log, Remote Power Control (RPC),
 // Slave-ID 10. Für den Direktvermarkter/„3rd party" gedachte Sollwert-
 // Schnittstelle — genau diese Rolle übernimmt eine Instanz mit diesem
@@ -2541,6 +2615,7 @@ class MeterHub extends IPSModule
         'inexogy'          => 'MHUB_InexogyDriver',
         'bluelog_scada_inverter' => 'MHUB_BlueLogScadaInverterDriver',
         'bluelog_scada_meter'    => 'MHUB_BlueLogScadaMeterDriver',
+        'bluelog_scada_logger'   => 'MHUB_BlueLogScadaLoggerDriver',
         'bluelog_rpc'            => 'MHUB_BlueLogRpcDriver',
         'bluelog_powercontrol'   => 'MHUB_BlueLogPowerControlDriver',
     ];
@@ -2568,6 +2643,7 @@ class MeterHub extends IPSModule
         'inexogy'          => 'Inexogy / Discovergy (Cloud)',
         'bluelog_scada_inverter' => "Meteocontrol blue'Log SCADA – Wechselrichter",
         'bluelog_scada_meter'    => "Meteocontrol blue'Log SCADA – Zähler",
+        'bluelog_scada_logger'   => "Meteocontrol blue'Log SCADA – Datenlogger (Summe, Adresse 97)",
         'bluelog_rpc'            => "Meteocontrol blue'Log RPC (Direktvermarkter, ⚠️ schreibend)",
         'bluelog_powercontrol'   => "Meteocontrol blue'Log Power Control (Netzbetreiber, ⚠️ schreibend)",
     ];
@@ -3403,6 +3479,7 @@ class MeterHub extends IPSModule
                         ['caption' => 'Inexogy / Discovergy (Cloud-API, kein Modbus)', 'value' => 'inexogy'],
                         ['caption' => 'Meteocontrol blue\'Log SCADA – Wechselrichter (SCADA-Adresse = Unit-ID)', 'value' => 'bluelog_scada_inverter'],
                         ['caption' => 'Meteocontrol blue\'Log SCADA – Zähler (SCADA-Adresse = Unit-ID)', 'value' => 'bluelog_scada_meter'],
+                        ['caption' => 'Meteocontrol blue\'Log SCADA – Datenlogger, Summe aller Wechselrichter (Unit-ID 97)', 'value' => 'bluelog_scada_logger'],
                     ],
                 ],
                 [

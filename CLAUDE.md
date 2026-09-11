@@ -997,6 +997,13 @@ ausgeliefert wird.
   Address" für die *ganze* Anfrage. Daher zwei getrennte Blöcke (1–42, 55–72).
 - **Janitza** — UMG 604/605/509/512/806/96PA/801 teilen sich eine Registerkarte; nur der
   **UMG 800** weicht ab (frei konfigurierbare Werkskarte, Summen an anderer Stelle).
+- **blue'Log SCADA, Adresse 97 (Datenlogger)** — laut „SCADA Interface Register V2.24.0"
+  (`~/Downloads/557009-SCADA-interface_de.pdf`) ist dort nur 10000 `P_AC_INV_SUM` (W, F32)
+  dokumentiert. Live gemessen (Solarpark, blue'Log .201, 11.09.2026): 40000 = 0, 10000 =
+  567 725 W (CDAB), 10002 ff. 0xFFFF/NaN, 10004/10006 = 31 ohne Doku → nicht übernommen.
+  Kein Zählerstand unter 97. Solarpark-Systemprotokoll ist mit „Socket ist nicht
+  verbunden"-Warnungen geflutet: eigene `trigger_error`-Ausgaben mit `limit` 60–100 suchen,
+  NaN-Werte vor `json_encode` in Text wandeln (sonst leere Ausgabe).
 - Als **experimentell** markierte Treiber (Socomec, MBS) sind aus Vorlagen abgeleitet und
   nicht hardwareverifiziert — das gehört sichtbar ins Dropdown und in die README.
 - **Gegenrecherche statt Neuentwurf (27.07.2026, Verbund-Erwartung „aktives Engagement"):**

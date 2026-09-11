@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.26.2-beta.1 (2026-09-11)
+
+- **🆕 blue'Log-Adresse 97 als eigener Zähler.** Dietmars Vorgabe: „Die 97 muss
+  definitiv erscheinen, weil die 97 die Zusammenfassung des kompletten Datenloggers
+  darstellt." Neuer Zählertyp „Meteocontrol blue'Log SCADA – Datenlogger (Summe,
+  Adresse 97)": Register 10000 `P_AC_INV_SUM` (Summe der AC-Leistung aller
+  Wechselrichter, beim XC-Master inkl. Slaves), Float32 CDAB, rein lesend.
+  - Registerkarte aus „SCADA Interface Register V2.24.0" und live am Solarpark
+    gemessen (blue'Log .201: Gerätetyp 0, 567 725 W) — deckungsgleich mit der dort
+    von Hand konfigurierten Symcon-Abfrage derselben Größe.
+  - Die Discovery prüft Adresse 97 bei jedem gefundenen blue'Log mit (sowohl im
+    Netzwerk-Suchlauf als auch im blue'Log-Adressbereich) und bietet sie als
+    anlegbaren Zähler an. Gerätetyp 0 wird nur unter 97 akzeptiert.
+  - Kein Zählerstand: unter 97 ist keine Energie dokumentiert. Power Control/RPC
+    bleiben von Hand anzulegen (keine zwei Schreiber).
+- Prüfstand `.tools/test-virtual.php` Block 36 (echte Rohwerte vom blue'Log).
+
 ## 0.26.1-beta.1 (2026-09-11)
 
 - **🔧 Fix: falsche Leistung bei Geräten ohne MeterHub-Idents (z. B. Wallboxen).**

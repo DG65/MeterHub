@@ -1750,5 +1750,46 @@ check('35n: Summe mit der Gesamtleistung der Wallbox (11000 + 100)', abs((float)
 $warnF = implode(' | ', t35_call($f, 'Warnings', t35_call($f, 'Nodes')));
 check('35n: Warnung für den mehrdeutigen Messer', str_contains($warnF, 'Zweikanal') && str_contains($warnF, 'mehrere gleichwertige'), $warnF);
 
+echo "\n36) blue'Log SCADA – Datenlogger (Adresse 97): Rohwerte live am Solarpark gemessen (blue'Log .201, 11.09.2026)\n";
+class T36_FakeModbus extends MHUB_ModbusTcpClient
+{
+    public $regs = [];
+    public function __construct() { parent::__construct('', 0, 97); }
+    public function readHolding($startReg, $count)
+    {
+        $out = [];
+        for ($i = 0; $i < $count; $i++) {
+            if (!array_key_exists($startReg + $i, $this->regs)) { return null; }
+            $out[] = $this->regs[$startReg + $i];
+        }
+        return $out;
+    }
+}
+class T36_FakeHub
+{
+    public $v = [];
+    public function SetVarBool($i, $x)  { $this->v[$i] = $x; }
+    public function SetVarFloat($i, $x) { $this->v[$i] = $x; }
+    public function SetVarInt($i, $x)   { $this->v[$i] = $x; }
+    public function GroupActive($g)     { return false; }
+}
+$mb36  = new T36_FakeModbus();
+$mb36->regs = [10000 => 0x9AD0, 10001 => 0x490A, 40000 => 0];
+$hub36 = new T36_FakeHub();
+$drv36 = new MHUB_BlueLogScadaLoggerDriver();
+check('36: Park-Leistung aus den echten Rohwörtern (9AD0 490A, CDAB = 567725 W)', $drv36->readFast($mb36, $hub36) === true && abs(($hub36->v['power_total'] ?? 0) - 567725.0) < 1, json_encode($hub36->v));
+check('36: Gerätetyp 0 = Datenlogger', ($hub36->v['device_type'] ?? -1) === 0);
+$mb36->regs[10000] = 0xFFFF;
+$mb36->regs[10001] = 0xFFFF;
+$hub36->v = [];
+$drv36->readFast($mb36, $hub36);
+check('36: fehlender Wert (0xFFFFFFFF) wird nicht als Zahl geschrieben', !isset($hub36->v['power_total']) && ($hub36->v['connected'] ?? false) === true, json_encode($hub36->v));
+$mb36->regs = [];
+$hub36->v = [];
+check('36: keine Antwort → Verbindung „false"', $drv36->readFast($mb36, $hub36) === false && ($hub36->v['connected'] ?? true) === false);
+check('36: rein lesend (kein Schreib-Interface)', !($drv36 instanceof MHUB_WritableMeterDriverInterface));
+$drivers36 = (new ReflectionClassConstant('MeterHub', 'DRIVERS'))->getValue();
+check('36: Zählertyp registriert', ($drivers36['bluelog_scada_logger'] ?? '') === 'MHUB_BlueLogScadaLoggerDriver');
+
 echo "\n" . ($fails === 0 ? "ALLE PRÜFUNGEN BESTANDEN\n" : "$fails PRÜFUNG(EN) FEHLGESCHLAGEN\n");
 exit($fails === 0 ? 0 : 1);

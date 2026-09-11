@@ -53,14 +53,21 @@ class MeterHubDiscovery extends IPSModule
     // für alle zehn vom Hersteller definierten Typen) — ein Sensor/Tracker/
     // Genset/Batterie/Kraftwerksregler an dieser Adresse wird gefunden, aber
     // bewusst NICHT vorgeschlagen (kein passender Treiber vorhanden).
+    // 0 = das blue'Log selbst, gilt NUR unter Adresse 97 (Dietmars Vorgabe
+    // 11.09.2026: „Die 97 muss definitiv erscheinen") — siehe
+    // identifyBlueLogDevicesBatch().
     private const BLUELOG_METER_MAP = [
+        0 => 'bluelog_scada_logger',
         1 => 'bluelog_scada_inverter',
         3 => 'bluelog_scada_meter',
     ];
     private const BLUELOG_TYPE_LABELS = [
+        0 => "Datenlogger – Summe aller Wechselrichter",
         1 => 'Wechselrichter',
         3 => 'Zähler',
     ];
+    // SCADA-Adresse des blue'Log selbst (fest, laut Hersteller reserviert).
+    private const BLUELOG_SELF_ADDR = 97;
     // Kurze Verschnaufpause zwischen zwei GANZEN parallelen Anfragerunden
     // zur selben blue'Log-IP (nicht mehr zwischen einzelnen Verbindungen —
     // siehe FÜNFTE KORREKTUR bei `identifyBlueLogHost()`: viele
@@ -729,7 +736,9 @@ class MeterHubDiscovery extends IPSModule
             }
             if ($isBlueLog) {
                 $blueLogsFound++;
-                $scadaAddrs = range($scadaFrom, $scadaTo);
+                // Adresse 97 (das blue'Log selbst, Summe) immer mit, auch
+                // wenn sie außerhalb des Geräte-Bereichs liegt.
+                $scadaAddrs = array_values(array_unique(array_merge([self::BLUELOG_SELF_ADDR], range($scadaFrom, $scadaTo))));
                 foreach (array_chunk($scadaAddrs, self::BLUELOG_SCAN_BATCH_SIZE) as $batch) {
                     if ($this->scanAborted()) { $aborted = true; break 2; }
                     $this->ShowProgress(
@@ -797,7 +806,7 @@ class MeterHubDiscovery extends IPSModule
         @$this->UpdateFormField('BtnScanBlueLog', 'visible', false);
         @$this->UpdateFormField('BtnAbortBlueLog', 'visible', true);
 
-        $addrs = range($from, $to);
+        $addrs = array_values(array_unique(array_merge([self::BLUELOG_SELF_ADDR], range($from, $to))));
         // Sicherheitsgrenze wie bei Discover()s IP-Bereich (dort 1024) — der
         // SCADA-Adressraum (0..247, Modbus-Unit-ID) ist ohnehin viel kleiner.
         if (count($addrs) > 247) {
@@ -988,7 +997,10 @@ class MeterHubDiscovery extends IPSModule
         foreach ($targets as $i => $t) {
             $regs = $results[$i] ?? null;
             $type = $regs[0] ?? null;
-            if ($type === null || !isset(self::BLUELOG_METER_MAP[$type])) {
+            // Gerätetyp 0 (Datenlogger) nur unter Adresse 97 und dort nur er —
+            // alles andere wäre eine widersprüchliche Meldung.
+            if ($type === null || !isset(self::BLUELOG_METER_MAP[$type])
+                || (($type === 0) !== ($t['unitId'] === self::BLUELOG_SELF_ADDR))) {
                 continue;
             }
             $unitId  = $t['unitId'];
