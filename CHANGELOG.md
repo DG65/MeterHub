@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.26.4-beta.1 (2026-09-11)
+
+- **🆕 blue'Log-Datenlogger (Adresse 97): Ertrag wird hochgerechnet.** Dietmars Auftrag:
+  „Wenn 97 kein Register für Energie liefert, dann müssen wir die Energie selbst
+  ausrechnen lassen." Neue Variable „Ertrag gesamt (hochgerechnet)" (kWh, archiviert
+  als Zähler): nach jedem erfolgreichen Lesezyklus Leistung × Zeit (Trapez zwischen
+  zwei Messwerten) auf den bisherigen Stand.
+  - Zeitbasis ist der Aktualisierungszeitpunkt der Leistungsvariable — ein Takt ohne
+    gültigen Wert zählt nicht, die Summe der Zeitabschnitte ist exakt die überdeckte
+    Zeit.
+  - Lücken über 5 Abfragetakte (mindestens 5 Minuten) werden nicht überbrückt —
+    lieber etwas zu wenig als erfundener Ertrag. Negative Nachtwerte zählen als 0.
+  - Allgemein gelöst über den neuen optionalen Treibervertrag
+    `MHUB_CalculatedEnergyDriverInterface` — weitere Geräte ohne Zählerstand lassen
+    sich mit einer Zeile anschließen.
+  - `MHUB_GetFunctions` meldet solche Energie mit `energyMeasured: false`
+    (Vertrag 1.3, additiv).
+- News-Panel nachgezogen (Datenlogger-Zählertyp aus 0.26.2/0.26.3 und die Hochrechnung).
+- Prüfstand Block 36b (Trapez, Lücke, fehlender Wert, Nacht, Stunden-Probe).
+
 ## 0.26.3-beta.1 (2026-09-11)
 
 - **🆕 blue'Log-Datenlogger (Adresse 97): Wechselrichter-Anzahl und Leistungsregelung.**

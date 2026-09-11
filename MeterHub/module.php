@@ -251,6 +251,23 @@ interface MHUB_MeterDriverInterface
 }
 
 // ---------------------------------------------------------------------------
+// MHUB_CalculatedEnergyDriverInterface — optionaler Zusatzvertrag für Treiber,
+// deren Gerät KEINEN Zählerstand liefert, aber eine verlässliche Leistung
+// (bisher: blue'Log-Datenlogger, Adresse 97). MeterHub rechnet dann nach
+// jedem erfolgreichen Lesezyklus Leistung × Zeit zu einem kumulativen
+// Zählerstand hoch (AdvanceCalculatedEnergy()). Dietmars Auftrag 11.09.2026:
+// „Wenn 97 kein Register für Energie liefert, dann müssen wir die Energie
+// selbst ausrechnen lassen." Bewusst „hochgerechnet", nie „geschätzt" —
+// eine Rechnung aus real gemessenen Werten (Dietmars Wortwahl 01.09.2026).
+// ---------------------------------------------------------------------------
+
+interface MHUB_CalculatedEnergyDriverInterface
+{
+    /** [Energie-Ident => Leistungs-Ident], z. B. ['energy_export' => 'power_total']. */
+    public function calculatedEnergy(): array;
+}
+
+// ---------------------------------------------------------------------------
 // MHUB_WritableMeterDriverInterface — optionaler Zusatzvertrag für Treiber,
 // die auch SCHREIBEN (bisher nur die beiden blue'Log-Sollwertkanäle RPC/Power
 // Control). Bewusst ein separates, optionales Interface statt einer
@@ -2394,21 +2411,29 @@ class MHUB_BlueLogScadaMeterDriver implements MHUB_MeterDriverInterface
 // .212 (XC-10000): 2,40 MW, 276/271 WR, 3,50 MW/3,26 Mvar verfügbar,
 // Sollwert 100 %. .217 (XC-20000): 4,06 MW, 440/432 WR.
 //
-// Kein Zählerstand: die SCADA-Schnittstelle dokumentiert unter 97 keine
-// Energie. Kumulativen Ertrag liefern die einzelnen Wechselrichter (E_TOTAL,
-// siehe MHUB_BlueLogScadaInverterDriver) — z. B. per MeterHubVirtual
-// summieren. Rein lesend; Power Control/RPC bleiben eigene, bewusst von Hand
-// anzulegende Zählertypen (keine zwei Schreiber).
+// Kein Zählerstand im Gerät: die SCADA-Schnittstelle dokumentiert unter 97
+// keine Energie. Der Ertrag wird deshalb von MeterHub aus der Park-Leistung
+// hochgerechnet (MHUB_CalculatedEnergyDriverInterface, Dietmars Auftrag
+// 11.09.2026). Rein lesend; Power Control/RPC bleiben eigene, bewusst von
+// Hand anzulegende Zählertypen (keine zwei Schreiber).
 // ---------------------------------------------------------------------------
 
-class MHUB_BlueLogScadaLoggerDriver implements MHUB_MeterDriverInterface
+class MHUB_BlueLogScadaLoggerDriver implements MHUB_MeterDriverInterface, MHUB_CalculatedEnergyDriverInterface
 {
+    public function calculatedEnergy(): array
+    {
+        // Park-Leistung ist Erzeugung (positiv) → Ertrag = Abgabe-Zähler,
+        // wie E_TOTAL beim Wechselrichter-Treiber.
+        return ['energy_export' => 'power_total'];
+    }
+
     public function getBaseVars()
     {
         return [
             ['power_total',   'Wirkleistung AC (Summe aller Wechselrichter)', 'F', 'NRG.Watt', true,  'total', 'FC3 10000 (P_AC_INV_SUM, Adresse 97)'],
             // Ab SCADA 2.25 (Doku V2.27.0). Als Ganzzahl ohne Profil — der
             // Unterschied installiert/aktiv zeigt ausgefallene Wechselrichter.
+            ['energy_export', 'Ertrag gesamt (hochgerechnet)', 'F', 'NRG.kWh', true, 'energy', 'hochgerechnet: Leistung × Zeit aus FC3 10000 (kein Zählerstand im Gerät)'],
             ['inv_installed', 'Wechselrichter installiert',  'I', '', true,  'total', 'FC3 10004 (PPC_INV_INST)'],
             ['inv_active',    'Wechselrichter aktiv',        'I', '', true,  'total', 'FC3 10006 (PPC_INV_AVAIL)'],
             ['device_type',   'Gerätetyp (SCADA-Meldung)',   'I', 'MHB.BlueLogDeviceType', false, 'total', 'FC3 40000'],
@@ -2483,7 +2508,8 @@ class MHUB_BlueLogScadaLoggerDriver implements MHUB_MeterDriverInterface
         return true;
     }
 
-    // Kein dokumentierter Zählerstand unter Adresse 97 (siehe oben).
+    // Kein dokumentierter Zählerstand unter Adresse 97 — der Ertrag entsteht
+    // in MeterHub::AdvanceCalculatedEnergy() nach jedem readFast().
     public function readSlow($mb, $hub)
     {
     }
@@ -2831,6 +2857,10 @@ class MeterHub extends IPSModule
         $this->RegisterAttributeString('InexogyConsumerSecret', '');
         $this->RegisterAttributeString('InexogyToken', '');
         $this->RegisterAttributeString('InexogyTokenSecret', '');
+        // Rechenstand der hochgerechneten Energie (letzter Zeitpunkt + Leistung
+        // je Energie-Ident), siehe AdvanceCalculatedEnergy(). Der Zählerstand
+        // selbst steckt in der Variable, nicht hier.
+        $this->RegisterAttributeString('CalcEnergyState', '{}');
         $this->RegisterPropertyInteger('IntervalFast', 5);
         $this->RegisterPropertyInteger('IntervalSlow', 60);
         // Archiv-Verdichtung, konfigurierbar statt fest im Code (Dietmars
@@ -2883,7 +2913,7 @@ class MeterHub extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.24.37';
+    private const NEWS_VERSION = '0.26.4';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -2922,6 +2952,8 @@ class MeterHub extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
+                ['type' => 'Label', 'caption' => '• 🆕 Neuer Zählertyp „Meteocontrol blue\'Log SCADA – Datenlogger (Summe, Adresse 97)": Park-Leistung aller Wechselrichter, installierte/aktive Wechselrichter, optional die Leistungsregelung (verfügbare Wirk-/Blindleistung, Sollwert %). Die Gerätesuche bietet Adresse 97 bei jedem blue\'Log mit an. Rein lesend.'],
+                ['type' => 'Label', 'caption' => '• 🆕 Weil das blue\'Log unter 97 keinen Zählerstand liefert, rechnet MeterHub den „Ertrag gesamt (hochgerechnet)" selbst aus der Leistung hoch — Leistung × Zeit, archiviert wie ein echter Zähler. Lücken (Gerät nicht erreichbar, Neustart) werden nicht mit veralteten Werten überbrückt.'],
                 ['type' => 'Label', 'caption' => '• ⚠️🆕 Zwei neue, SCHREIBENDE Zählertypen: „Meteocontrol blue\'Log RPC" (Direktvermarkter) und „… Power Control" (Netzbetreiber). MeterHub kann jetzt einen Sollwert kontinuierlich auf einem blue\'Log-Kontrollkanal halten (relativ % oder absolut W, umschaltbar) — das erste Mal, dass dieses Modul nicht nur liest, sondern auch schreibt. Vor dem Aktivieren unbedingt sicherstellen, dass kein zweites System denselben Kanal bedient.'],
                 ['type' => 'Label', 'caption' => '• Ausfallverhalten beim Deaktivieren wählbar: „Default-Sollwert schreiben" (sofort zurück in den Normalbetrieb) oder „letzten Sollwert halten" (blue\'Log-eigene Gültigkeitszeit läuft von selbst ab). Neue Funktion `MHUB_SetBlueLogTarget($id, $wert)` für Skripte/EMS.'],
                 ['type' => 'Label', 'caption' => '• 🆕 Zwei neue, rein lesende Zählertypen: „Meteocontrol blue\'Log SCADA – Wechselrichter/Zähler". Ein blue\'Log-Solarpark-Datenlogger kann jedes angeschlossene Gerät unter einer eigenen „SCADA-Adresse" anbieten (steht am blue\'Log selbst: Geräteliste → Spalte „SCADA Adresse") — diese Adresse ist die Unit-ID der Instanz, NICHT 1.'],
@@ -3066,6 +3098,9 @@ class MeterHub extends IPSModule
         if ($driver instanceof MHUB_WritableMeterDriverInterface) {
             $driver->writeSetpoint($mb, $this);
         }
+        if ($ok && $driver instanceof MHUB_CalculatedEnergyDriverInterface) {
+            $this->AdvanceCalculatedEnergy($driver->calculatedEnergy());
+        }
         $this->SetStatus($ok ? 102 : 201);
         $this->UpdateMirrors();
     }
@@ -3078,6 +3113,69 @@ class MeterHub extends IPSModule
         $this->GetDriver()->readSlow($this->GetTransport(), $this);
         $this->UpdateMirrors();
         $this->MaybeAutoBackfillInexogy();
+    }
+
+    /**
+     * Energie aus der Leistung hochrechnen (Trapez: Mittel der letzten zwei
+     * Messwerte × Zeit dazwischen) und auf den Zählerstand der Variable
+     * aufaddieren. Zeitbasis ist `VariableUpdated` der Leistungsvariable —
+     * ein Takt, in dem der Treiber keinen gültigen Wert geschrieben hat (NaN
+     * am Gerät), ändert den Zeitstempel nicht und zählt deshalb nicht. Die
+     * Summe aller Zeitabschnitte ist exakt die tatsächlich überdeckte Zeit,
+     * Takt-Schwankungen heben sich auf.
+     */
+    private function AdvanceCalculatedEnergy(array $map): void
+    {
+        $state = json_decode($this->ReadAttributeString('CalcEnergyState'), true);
+        $state = is_array($state) ? $state : [];
+        // Längere Lücken (Gerät nicht erreichbar, Symcon-Neustart, Instanz
+        // deaktiviert) werden NICHT mit einem veralteten Wert überbrückt —
+        // lieber etwas zu wenig als erfundener Ertrag.
+        $maxGap = max(300, 5 * max(1, $this->ReadPropertyInteger('IntervalFast')));
+        $invert = $this->ReadPropertyBoolean('PowerInvert');
+        foreach ($map as $eIdent => $pIdent) {
+            $pid = $this->FindVarByIdent($pIdent);
+            $eid = $this->FindVarByIdent($this->EnergyIdentForInvert($eIdent));
+            if (!$pid || !$eid) {
+                continue;
+            }
+            $p = (float)GetValue($pid);
+            if ($pIdent === 'power_total' && $invert) {
+                $p = -$p; // SetVarFloat() hat invertiert — für die Rechnung zurück
+            }
+            $t = (int)(IPS_GetVariable($pid)['VariableUpdated'] ?? 0);
+            [$addKWh, $state[$eIdent]] = self::CalcEnergyStep($state[$eIdent] ?? null, $t, $p, $maxGap);
+            if ($addKWh > 0) {
+                $factor = $this->ReadPropertyBoolean('EnergyUnitWh') ? 1000.0 : 1.0;
+                SetValueFloat($eid, (float)GetValue($eid) + $addKWh * $factor);
+            }
+        }
+        $this->WriteAttributeString('CalcEnergyState', (string)json_encode($state));
+    }
+
+    /**
+     * Ein Rechenschritt, frei von Symcon-Aufrufen (Prüfstand). Rückgabe
+     * [kWh dazu, neuer Rechenstand]. Negative Leistung (Eigenverbrauch der
+     * Wechselrichter nachts) zählt als 0 — ein Ertragszähler läuft nie
+     * rückwärts. Ungültige Werte ändern nichts.
+     */
+    private static function CalcEnergyStep(?array $prev, int $t, float $p, int $maxGap): array
+    {
+        if (!is_finite($p) || $t <= 0) {
+            return [0.0, $prev];
+        }
+        $p = max(0.0, $p);
+        if ($prev === null || !isset($prev['t'], $prev['p'])) {
+            return [0.0, ['t' => $t, 'p' => $p]];
+        }
+        $dt = $t - (int)$prev['t'];
+        if ($dt <= 0) {
+            return [0.0, $prev];
+        }
+        if ($dt > $maxGap) {
+            return [0.0, ['t' => $t, 'p' => $p]];
+        }
+        return [(((float)$prev['p'] + $p) / 2.0) * $dt / 3600000.0, ['t' => $t, 'p' => $p]];
     }
 
     /**
@@ -4355,6 +4453,13 @@ class MeterHub extends IPSModule
             $archiveWatermarkTs = ($wmErr === null && $wm > 0) ? $wm : null;
         }
 
+        // Hochgerechnete statt gemessene Energie (MHUB_CalculatedEnergyDriver-
+        // Interface, 0.26.4) — Vertrags-Regel „Genauigkeit braucht ein eigenes
+        // Flag": ein Konsument soll erkennen können, dass der Zählerstand aus
+        // der Leistung gerechnet ist, statt es aus dem Namen zu erraten.
+        $driver = $this->GetDriver();
+        $calcIdents = $driver instanceof MHUB_CalculatedEnergyDriverInterface ? array_keys($driver->calculatedEnergy()) : [];
+
         $list = [];
         foreach ($this->FunctionAssignments() as $a) {
             $list[] = [
@@ -4364,8 +4469,11 @@ class MeterHub extends IPSModule
                 'powerID'         => $this->FindVarByIdent($a['power']),
                 'energyImportID'  => $this->FindVarByIdent($a['import']),
                 'energyExportID'  => $this->FindVarByIdent($a['export']),
-                // Alle bisherigen Treiber liefern kumulative Zählerstände.
+                // Kumulative Zählerstände — auch der hochgerechnete ist einer.
                 'energyKind'      => 'counter',
+                // 1.3: false = Zählerstand aus der Leistung hochgerechnet
+                // (Gerät liefert keinen), true = vom Gerät gemessen.
+                'energyMeasured'  => !in_array($a['import'], $calcIdents, true) && !in_array($a['export'], $calcIdents, true),
                 // Zähler-Eigenschaften in JEDE Zuordnung gespiegelt (identisch
                 // zur Instanz-Ebene). So kann ein Konsument, der über
                 // assignments[] iteriert und nach function filtert, authority/
@@ -4386,7 +4494,9 @@ class MeterHub extends IPSModule
             // sonst null). Additiv; Major nur bei Bruch, volle Kompatibilität
             // innerhalb derselben Major. Fehlt das Feld, ist konservativ die
             // jeweils niedrigere Version anzunehmen.
-            'contractVersion' => '1.2',
+            // 1.3 = energyMeasured je Zuordnung (0.26.4, hochgerechnete
+            // Energie beim blue'Log-Datenlogger). Fehlt es, gilt true.
+            'contractVersion' => '1.3',
             'instanceID'  => $this->InstanceID,
             'meter'       => $this->ReadPropertyString('Meter'),
             'measureMode' => $this->ReadPropertyString('MeasureMode'),

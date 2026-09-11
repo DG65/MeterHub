@@ -409,7 +409,9 @@ je nur ein `AC_GetLoggedValues(..., Limit=1)`-Aufruf).
 **Vertragsversionierung (Verbund-Konvention 23.07.2026, Manifest `DG65/EMS/SUITE.md`):**
 `contractVersion` ist ein `'Major.Minor'`-String — **1.0** = Ur-Vertrag (function/label/…/
 measured), **1.1** = die latency/authority/pollInterval/energyKind/sourceCount-Erweiterung,
-**1.2** = `archiveWatermarkTs` (MeterHub, 27.08.2026).
+**1.2** = `archiveWatermarkTs` (MeterHub, 27.08.2026), **1.3** = `energyMeasured` je
+Zuordnung (MeterHub 0.26.4, 11.09.2026 — `false` = Zählerstand aus der Leistung
+hochgerechnet, fehlt das Feld, gilt `true`).
 **Major nur bei Bruch;** volle Kompatibilität ist nur innerhalb derselben Major garantiert
 (blue'Log-Prinzip). Additiv erweitern hebt die Minor, nie die Major. Fehlt das Feld (alter
 Anbieter), ist konservativ `'1.0'` anzunehmen. Ein Konsument, der eine höhere Major braucht als
@@ -439,7 +441,13 @@ Eigenschaften (energyKind/sourceCount) nur je Zuordnung.**
 3. **Energie nur aus kumulativen Zählern.** Tages-/Monatswerte, die periodisch auf 0
    zurückspringen, taugen nicht für Bilanzen (die Auswertung bildet Zählerdifferenzen). Fehlt
    ein kumulativer Zähler, wird die Größe **weggelassen** — niemals aus der Leistung
-   hochrechnen.
+   hochrechnen. **Ausnahme seit 11.09.2026 (Dietmars ausdrücklicher Auftrag beim
+   blue'Log-Datenlogger, Adresse 97 ohne Zählerregister):** hochrechnen ist erlaubt,
+   wenn das Gerät grundsätzlich keinen Zählerstand hat — dann aber immer mit
+   `energyMeasured: false` im Vertrag, „(hochgerechnet)" im Variablennamen, Lücken
+   nicht überbrückt (`MHUB_CalculatedEnergyDriverInterface`,
+   `MeterHub::AdvanceCalculatedEnergy()`). Analog zu MeterHubVirtuals „Energie
+   hochgerechnet" (01.09.2026). Nie als Ersatz für einen vorhandenen Zähler.
 4. **Immer hinter `function_exists('XXX_GetFunctions')`.** Das Partnermodul ist optional; ohne
    es muss alles unverändert laufen.
 5. **Das Suffix `ID` kennzeichnet eine Referenz, es ist keine Stilregel.** `powerID` heißt

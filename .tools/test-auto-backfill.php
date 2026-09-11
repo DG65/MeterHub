@@ -193,7 +193,8 @@ echo "\n9) GetFunctions() meldet den Wasserstand als archiveWatermarkTs (Dashboa
 $wm9 = time() - 12 * 60;
 $GLOBALS['ARCHIVE_LATEST'] = [701 => $wm9, 702 => $wm9, 703 => $wm9];
 $gf = json_decode($h700->GetFunctions(), true);
-check('contractVersion = 1.2', ($gf['contractVersion'] ?? '') === '1.2', (string) ($gf['contractVersion'] ?? ''));
+check('contractVersion = 1.3 (energyMeasured, MeterHub 0.26.4)', ($gf['contractVersion'] ?? '') === '1.3', (string) ($gf['contractVersion'] ?? ''));
+check('gemessener Zähler meldet energyMeasured = true in jeder Zuordnung', array_filter($gf['assignments'] ?? [], fn($a) => ($a['energyMeasured'] ?? null) !== true) === [], json_encode($gf['assignments'] ?? []));
 check('archiveWatermarkTs auf oberster Ebene gesetzt', abs(($gf['archiveWatermarkTs'] ?? 0) - $wm9) <= 2, json_encode($gf['archiveWatermarkTs'] ?? null));
 
 echo "\n  9b) Echtzeit-Zähler (kein Cloud-Zähler) -> archiveWatermarkTs bleibt null, keine unnötige Archiv-Abfrage\n";

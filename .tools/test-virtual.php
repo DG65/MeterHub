@@ -1807,5 +1807,31 @@ check('36: rein lesend (kein Schreib-Interface)', !($drv36 instanceof MHUB_Writa
 $drivers36 = (new ReflectionClassConstant('MeterHub', 'DRIVERS'))->getValue();
 check('36: Zählertyp registriert', ($drivers36['bluelog_scada_logger'] ?? '') === 'MHUB_BlueLogScadaLoggerDriver');
 
+echo "  36b) Ertrag aus der Leistung hochrechnen (Dietmars Auftrag 11.09.2026: „dann müssen wir die Energie selbst ausrechnen lassen\")\n";
+check('36b: Datenlogger meldet hochgerechnete Energie an (Abgabe aus power_total)', $drv36 instanceof MHUB_CalculatedEnergyDriverInterface && $drv36->calculatedEnergy() === ['energy_export' => 'power_total']);
+$baseIdents36 = array_column($drv36->getBaseVars(), 0);
+check('36b: Variable „Ertrag gesamt (hochgerechnet)" als archivierter Zählerstand', in_array('energy_export', $baseIdents36, true)
+    && array_values(array_filter($drv36->getBaseVars(), fn($v) => $v[0] === 'energy_export'))[0][5] === 'energy');
+$step = fn($prev, $t, $p, $gap = 300) => (new ReflectionMethod('MeterHub', 'CalcEnergyStep'))->invoke(null, $prev, $t, $p, $gap);
+[$k0, $s0] = $step(null, 1000, 500000.0);
+check('36b: erster Messwert setzt nur den Ausgangspunkt', $k0 === 0.0 && $s0 === ['t' => 1000, 'p' => 500000.0]);
+[$k1, $s1] = $step($s0, 1010, 520000.0);
+check('36b: Trapez: (500 + 520 kW)/2 × 10 s = 1,4167 kWh', abs($k1 - 510000.0 * 10 / 3600000.0) < 1e-9, (string)$k1);
+[$kSame, $sSame] = $step($s1, 1010, 999999.0);
+check('36b: kein neuer Zeitstempel (Takt ohne gültigen Wert) zählt nicht', $kSame === 0.0 && $sSame === $s1);
+[$kGap, $sGap] = $step($s1, 1010 + 1000, 400000.0);
+check('36b: Lücke > 300 s wird nicht überbrückt, Neustart ab dem neuen Wert', $kGap === 0.0 && $sGap === ['t' => 2010, 'p' => 400000.0]);
+[$kNeg, ] = $step(['t' => 3000, 'p' => 0.0], 3010, -50.0);
+check('36b: negative Nacht-Leistung lässt den Zähler nicht rückwärts laufen', $kNeg === 0.0);
+[$kNan, $sNan] = $step($s1, 1020, NAN);
+check('36b: NaN ändert nichts', $kNan === 0.0 && $sNan === $s1);
+$sum = 0.0;
+$st = null;
+for ($t = 0; $t <= 3600; $t += 5) {
+    [$k, $st] = $step($st, 100000 + $t, 3600000.0);
+    $sum += $k;
+}
+check('36b: eine Stunde konstant 3,6 MW in 5-s-Schritten = 3600 kWh', abs($sum - 3600.0) < 1e-6, (string)$sum);
+
 echo "\n" . ($fails === 0 ? "ALLE PRÜFUNGEN BESTANDEN\n" : "$fails PRÜFUNG(EN) FEHLGESCHLAGEN\n");
 exit($fails === 0 ? 0 : 1);
