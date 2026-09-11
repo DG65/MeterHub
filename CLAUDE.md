@@ -901,6 +901,20 @@ gesucht (`SwitchOfDevice()`, nur Instanz-Ziele), `SwitchID` ist nur Übersteueru
 `StatusVariable` (Symcon-Z-Wave, an 21 Aktoren belegt) gewinnt, sonst Warnung. Leerer
 Link-Name → Zielname (Symcon zeigt es im Baum genauso, ObjectName ist aber `""`).
 
+**Bearbeiten im Formular (0.26.0, Dietmars Wunsch):** Die Mitglieder-Tabelle hat
+add/delete/changeOrder; `ReconcileFormMembers()` wendet sie in `ApplyChanges()` auf den
+Baum an. Drei Schutzregeln, alle im Prüfstand 35m: (1) nur Zeilen mit `Form`-Kennung
+und nur bei geänderter Property (Attribut `ReconciledSettings`) — interne Speicherungen
+(`StoreMemberSettings()` entfernt die Formular-Spuren) und sonstige ApplyChanges-Anlässe
+fassen den Baum nie an; (2) umbenannt/umgezielt wird nur bei Abweichung von den
+unsichtbar mitgespeicherten `OrigName`/`OrigTarget` — Baum-Änderungen bei offenem
+Formular bleiben; (3) gelöscht wird nur, was beim Öffnen gezeigt wurde (Attribut
+`FormSnapshot`, in `GetConfigurationForm()` geschrieben) und ein Link ist. Neue Zeilen
+haben noch keine MemberID — `MemberSettingsMap()` ordnet sie über `Target` dem neuen
+Link zu. Unverifiziert: ob Symcon unsichtbare (`visible: false`) Spalten mit
+`save: true` wirklich speichert — laut Doku ja; fehlen sie live, greifen Umbenennen/
+Umzielen nicht (Hinzufügen/Löschen/Sortieren bleiben unberührt).
+
 **Blockierend** (`TreeErrors()`): Selbstbezug, Mitglied liefert eigene Ausgabe, Kreisverweis
 über verschachtelte Instanzen (`ReferencesInstance()`, beide Mitglieder-Quellen, Tiefe
 10). **Nur Warnung:** toter Link, Mitglied ohne gefundenen Datenpunkt.

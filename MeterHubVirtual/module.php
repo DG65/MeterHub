@@ -70,7 +70,7 @@ class MeterHubVirtual extends IPSModule
     // Formular-Konvention des Verbunds (SUITE.md „Einheitliche Formular-
     // Optik", Referenz InverterHub). NEWS_VERSION korrespondiert mit dem
     // CHANGELOG-Eintrag, der den jeweiligen Sprung erklärt.
-    private const NEWS_VERSION = '0.25.1';
+    private const NEWS_VERSION = '0.26.0';
 
     public function Create()
     {
@@ -155,6 +155,13 @@ class MeterHubVirtual extends IPSModule
         $this->RegisterAttributeString('TreeSignature', '');
         $this->RegisterAttributeString('TreeMessages', '[]');
         $this->RegisterAttributeString('NodesBackup', '');
+        // Mitglieder im Formular bearbeiten (0.26.0): zuletzt abgeglichener
+        // Stand der Mitglieder-Tabelle, die beim Öffnen gezeigten Mitglieder
+        // (nur die dürfen per Formular gelöscht werden) und Hinweise des
+        // letzten Abgleichs.
+        $this->RegisterAttributeString('ReconciledSettings', '');
+        $this->RegisterAttributeString('FormSnapshot', '[]');
+        $this->RegisterAttributeString('ReconcileNotes', '');
         $this->RegisterTimer('Recalc', 0, 'MHUBV_Recalc($_IPS[\'TARGET\']);');
     }
 
@@ -274,6 +281,7 @@ class MeterHubVirtual extends IPSModule
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
                 ['type' => 'Label', 'caption' => '• 🌳 Neu: Mitglieder direkt im Objektbaum — alles, was als Verknüpfung (Link) oder direkt unter dieser Instanz hängt, wird automatisch Mitglied, in der Reihenfolge seiner Position dort. Neue Instanzen starten so; gelöschte Geräte fallen sofort als „Ziel fehlt" auf statt still als Leiche weiterzuleben.'],
+                ['type' => 'Label', 'caption' => '• ✏️ Mitglieder direkt in der Tabelle bearbeiten: hinzufügen (Spalte „Ziel“), löschen, per Drag & Drop umsortieren, umbenennen, Ziel ändern — mit „Übernehmen“ werden die Links im Objektbaum entsprechend angepasst. Gelöscht werden nur Links, nie Geräte.'],
                 ['type' => 'Label', 'caption' => '• 🔀 Schalter der verknüpften Geräte werden automatisch erkannt (Gruppe schalten ohne Einstellung); mehrdeutige Geräte werden gemeldet. Pro Mitglied lässt sich übersteuern oder „nicht schalten" wählen. Links ohne eigenen Namen heißen wie ihr Ziel.'],
                 ['type' => 'Label', 'caption' => '• 🌳 Verschachteln: einen Link auf eine andere virtuelle Zähler-Instanz unterhängen (z. B. mehrere Wallbox-Zähler unter „Fahrzeugbeladung"). Kreisverweise werden erkannt und blockiert.'],
                 ['type' => 'Label', 'caption' => '• 🌳 Instanzen mit der bisherigen Tabelle rechnen unverändert weiter. Ein Knopf „In Objektbaum-Mitglieder umwandeln" legt auf Wunsch die Links an — rechnerisch identisch, die alte Tabelle wird gesichert.'],
@@ -469,7 +477,20 @@ class MeterHubVirtual extends IPSModule
             $mid = (int)($r['MemberID'] ?? 0);
             if ($mid <= 0) {
                 $members = $members ?? $this->TreeMembers();
-                $mid = (int)($members[$i]['member'] ?? 0);
+                $target = (int)($r['Target'] ?? 0);
+                if ($target > 0) {
+                    // Per „+" im Formular neu angelegte Zeile: gehört zu dem
+                    // Link, den ReconcileFormMembers() auf dieses Ziel angelegt
+                    // hat (die echte ID kennt die gespeicherte Zeile noch nicht).
+                    foreach ($members as $m) {
+                        if ($m['target'] === $target && !isset($map[$m['member']])) {
+                            $mid = $m['member'];
+                            break;
+                        }
+                    }
+                } elseif (empty($r['Form'])) {
+                    $mid = (int)($members[$i]['member'] ?? 0);
+                }
             }
             if ($mid > 0) {
                 $map[$mid] = $r;
@@ -609,8 +630,14 @@ class MeterHubVirtual extends IPSModule
                     continue 2;
                 }
             }
+            // Eine Variable, die direkt (ohne Ident) unter dieser Instanz
+            // einsortiert ist, ist ein normales Mitglied, kein Kreisverweis —
+            // ReferencesInstance() sähe sonst nur „Elternteil = diese
+            // Instanz". Echte eigene Ausgaben fängt die Prüfung oben ab.
+            $directVar = (int)IPS_GetObject($n['target'])['ObjectType'] === 2
+                && (int)IPS_GetParent($n['target']) === $this->InstanceID;
             $seen = [];
-            if ($this->ReferencesInstance($n['target'], $this->InstanceID, $seen, 0)) {
+            if (!$directVar && $this->ReferencesInstance($n['target'], $this->InstanceID, $seen, 0)) {
                 $errors[] = "Mitglied $label enthält (direkt oder über weitere virtuelle Zähler) wiederum diese Instanz — ein Kreisverweis, der sich nie auflösen lässt.";
             }
         }
@@ -770,6 +797,14 @@ class MeterHubVirtual extends IPSModule
             $rows[] = [
                 'MemberID'       => $n['member'],
                 'Name'           => $n['name'],
+                'Target'         => $n['target'],
+                // Ausgangswerte, unsichtbar mitgespeichert: ReconcileFormMembers()
+                // ändert im Objektbaum nur, was im Formular WIRKLICH geändert
+                // wurde — eine zwischenzeitliche Umbenennung im Baum bleibt so
+                // unangetastet.
+                'OrigName'       => $n['name'],
+                'OrigTarget'     => $n['target'],
+                'Form'           => true,
                 'Found'          => $this->FoundText($n),
                 'Factor'         => $n['factor'],
                 'Role'           => (string)($s['Role'] ?? ''),
@@ -824,6 +859,9 @@ class MeterHubVirtual extends IPSModule
             if ($mid > 0) {
                 return $byMember[$mid] ?? null;
             }
+            if (!empty($r['Form']) || (int)($r['Target'] ?? 0) > 0) {
+                return null; // neue Zeile, erst mit „Übernehmen" verknüpft
+            }
             return $list[$i] ?? null;
         };
     }
@@ -846,6 +884,13 @@ class MeterHubVirtual extends IPSModule
         }
         foreach ($patch as $mid => $fields) {
             $map[$mid] = array_merge($map[$mid] ?? [], $fields, ['MemberID' => (int)$mid]);
+        }
+        // Nur die Einstellungen weiterschreiben, nicht die Formular-Spuren —
+        // sonst würde ReconcileFormMembers() einen alten Formular-Stand
+        // (Name, Ziel) erneut auf den Objektbaum anwenden.
+        foreach ($map as $mid => $row) {
+            unset($row['Form'], $row['OrigName'], $row['OrigTarget'], $row['Name'], $row['Found'], $row['Target']);
+            $map[$mid] = $row;
         }
         IPS_SetProperty($this->InstanceID, 'MemberSettings', (string)json_encode(array_values($map)));
         IPS_ApplyChanges($this->InstanceID);
@@ -910,6 +955,131 @@ class MeterHubVirtual extends IPSModule
         return $msg;
     }
 
+    /**
+     * Mitglieder-Tabelle des Formulars auf den Objektbaum anwenden (Dietmars
+     * Wunsch 11.09.2026: „die Mitglieder … innerhalb des Formulars
+     * bearbeitbar machen"). Läuft nur, wenn sich die gespeicherte Tabelle
+     * seit dem letzten Abgleich geändert hat UND sie aus dem Formular stammt
+     * (Zeilen mit „Form"-Kennung) — interne Speicherungen
+     * (StoreMemberSettings(), ConvertToTree()) und alle anderen
+     * ApplyChanges()-Anlässe fassen den Objektbaum nicht an.
+     *
+     * Geändert wird nur, was im Formular geändert wurde (Vergleich mit den
+     * unsichtbar mitgespeicherten Ausgangswerten), gelöscht nur, was beim
+     * Öffnen des Formulars zu sehen war (FormSnapshot) und ein Link ist —
+     * ein Gerät, das direkt unter der Instanz hängt, wird nie gelöscht.
+     */
+    private function ReconcileFormMembers(): void
+    {
+        $json = $this->ReadPropertyString('MemberSettings');
+        if (!$this->IsTreeMode() || IPS_GetKernelRunlevel() !== KR_READY
+            || $json === $this->ReadAttributeString('ReconciledSettings')) {
+            return;
+        }
+        // Zuerst merken: die folgenden Objektbaum-Änderungen lösen Meldungen
+        // und damit ein erneutes ApplyChanges() aus — das darf nicht noch
+        // einmal abgleichen.
+        $this->WriteAttributeString('ReconciledSettings', $json);
+        $rows = json_decode($json, true);
+        $rows = is_array($rows) ? array_values(array_filter($rows, fn($r) => is_array($r) && !empty($r['Form']))) : [];
+        if (!$rows) {
+            return;
+        }
+        $notes = [];
+        $members = [];
+        $targets = [];
+        foreach ($this->TreeMembers() as $m) {
+            $members[$m['member']] = $m;
+            $targets[$m['target']] = $m['name'];
+        }
+
+        // 1. Zeilen, die im Formular gelöscht wurden
+        $kept = [];
+        foreach ($rows as $r) {
+            $kept[(int)($r['MemberID'] ?? 0)] = true;
+        }
+        $snapshot = json_decode($this->ReadAttributeString('FormSnapshot'), true);
+        foreach (is_array($snapshot) ? $snapshot : [] as $mid) {
+            $mid = (int)$mid;
+            if (isset($kept[$mid]) || !isset($members[$mid])) {
+                continue;
+            }
+            if ($members[$mid]['isLink']) {
+                unset($targets[$members[$mid]['target']]);
+                IPS_DeleteLink($mid);
+                unset($members[$mid]);
+            } else {
+                $notes[] = '„' . $members[$mid]['name'] . '“ hängt direkt (nicht als Link) unter dieser Instanz — ein Gerät bzw. eine Variable wird aus dem Formular nie gelöscht. Zum Entfernen im Objektbaum an einen anderen Ort verschieben.';
+            }
+        }
+
+        // 2. Zeile für Zeile: umbenennen, Ziel ändern, neu anlegen
+        $refused = function (int $target) use (&$notes): bool {
+            if (!IPS_ObjectExists($target)) {
+                $notes[] = "Ziel #$target existiert nicht — Zeile nicht übernommen.";
+                return true;
+            }
+            if ($target === $this->InstanceID) {
+                $notes[] = 'Diese Instanz kann nicht ihr eigenes Mitglied sein — Zeile nicht übernommen.';
+                return true;
+            }
+            $seen = [];
+            if ((int)IPS_GetObject($target)['ObjectType'] !== 2 && $this->ReferencesInstance($target, $this->InstanceID, $seen, 0)) {
+                $notes[] = '„' . IPS_GetName($target) . '“ enthält selbst (direkt oder verschachtelt) diese Instanz — Kreisverweis, Zeile nicht übernommen.';
+                return true;
+            }
+            return false;
+        };
+        $order = [];
+        foreach ($rows as $r) {
+            $mid    = (int)($r['MemberID'] ?? 0);
+            $name   = trim((string)($r['Name'] ?? ''));
+            $target = (int)($r['Target'] ?? 0);
+            if ($mid > 0) {
+                if (!isset($members[$mid])) {
+                    continue; // inzwischen im Objektbaum entfernt
+                }
+                if ($name !== '' && $name !== (string)($r['OrigName'] ?? '')) {
+                    IPS_SetName($mid, $name);
+                }
+                if ($target > 0 && $target !== (int)($r['OrigTarget'] ?? 0) && $target !== $members[$mid]['target']) {
+                    if (!$members[$mid]['isLink']) {
+                        $notes[] = '„' . $members[$mid]['name'] . '“ ist kein Link — sein Ziel lässt sich nicht ändern.';
+                    } elseif (isset($targets[$target])) {
+                        $notes[] = '„' . IPS_GetName($target) . '“ ist bereits Mitglied (als „' . $targets[$target] . '“) — Ziel von „' . $members[$mid]['name'] . '“ nicht geändert.';
+                    } elseif (!$refused($target)) {
+                        unset($targets[$members[$mid]['target']]);
+                        IPS_SetLinkTargetID($mid, $target);
+                        $targets[$target] = $members[$mid]['name'];
+                    }
+                }
+                $order[] = $mid;
+            } elseif ($target > 0) {
+                if (isset($targets[$target])) {
+                    $notes[] = '„' . IPS_GetName($target) . '“ ist bereits Mitglied (als „' . $targets[$target] . '“) — nicht doppelt verknüpft.';
+                    continue;
+                }
+                if ($refused($target)) {
+                    continue;
+                }
+                $link = $this->CreateMemberLink($target, $name !== '' ? $name : IPS_GetName($target));
+                $targets[$target] = IPS_GetName($link);
+                $order[] = $link;
+            } else {
+                $notes[] = 'Eine neue Zeile ohne Ziel wurde ignoriert — bitte in der Spalte „Ziel" ein Gerät, eine Variable oder einen anderen virtuellen Zähler wählen.';
+            }
+        }
+
+        // 3. Reihenfolge: nur neu vergeben, wenn sie im Formular geändert wurde
+        $current = array_values(array_filter(array_column($this->TreeMembers(), 'member'), fn($id) => in_array($id, $order, true)));
+        if ($current !== $order) {
+            foreach ($order as $i => $id) {
+                IPS_SetPosition($id, 100 + 10 * $i);
+            }
+        }
+        $this->WriteAttributeString('ReconcileNotes', $notes ? (string)json_encode(['ts' => time(), 'notes' => $notes]) : '');
+    }
+
     public function ApplyChanges()
     {
         parent::ApplyChanges();
@@ -946,6 +1116,7 @@ class MeterHubVirtual extends IPSModule
             return;
         }
 
+        $this->ReconcileFormMembers();
         $this->CreateProfiles();
         $errors = $this->Validate();
         $this->RegisterVariables($errors);
@@ -3186,6 +3357,14 @@ class MeterHubVirtual extends IPSModule
         }
 
         $check = [];
+        // Hinweise des letzten Formular-Abgleichs (z. B. nicht übernommene
+        // Zeilen) — zehn Minuten sichtbar, danach veraltet.
+        $rn = json_decode($this->ReadAttributeString('ReconcileNotes'), true);
+        if (is_array($rn) && time() - (int)($rn['ts'] ?? 0) < 600) {
+            foreach ((array)($rn['notes'] ?? []) as $note) {
+                $check[] = ['type' => 'Label', 'caption' => '⚠️ Beim letzten „Übernehmen“: ' . $note];
+            }
+        }
         if ($migration) {
             $check[] = ['type' => 'Label', 'caption' => 'Migration ausstehend — siehe Panel oben.'];
         } elseif (count($errors) > 0) {
@@ -3267,24 +3446,34 @@ class MeterHubVirtual extends IPSModule
                 ['caption' => 'Bezug (kWh)', 'value' => 'imp'],
                 ['caption' => 'Einspeisung (kWh)', 'value' => 'exp'],
             ];
+            // Beim Öffnen gezeigte Mitglieder merken — nur diese darf ein
+            // gelöschte Zeile beim „Übernehmen" entfernen (ein inzwischen im
+            // Objektbaum hinzugekommener Link fehlt in der Tabelle, darf aber
+            // nicht deshalb gelöscht werden).
+            $this->WriteAttributeString('FormSnapshot', (string)json_encode(array_column($treeRows, 'MemberID')));
             $listDef = [
                 'type' => 'List', 'name' => 'MemberSettings',
-                'caption' => 'Mitglieder — Reihenfolge wie im Objektbaum unter dieser Instanz',
+                'caption' => 'Mitglieder — hinzufügen, löschen, umsortieren und umbenennen wirkt mit „Übernehmen“ auf die Links im Objektbaum',
                 'rowCount' => $this->RowCountFor(count($treeRows)),
-                'add' => false, 'delete' => false,
+                'add' => true, 'delete' => true, 'changeOrder' => true,
                 'loadValuesFromConfiguration' => false,
                 'values' => $treeRows,
                 'columns' => [
-                    ['caption' => 'Mitglied', 'name' => 'Name', 'width' => '200px'],
-                    ['caption' => 'Erkannt', 'name' => 'Found', 'width' => '360px'],
-                    ['caption' => 'Anteil (%)', 'name' => 'Factor', 'width' => '130px', 'edit' => ['type' => 'NumberSpinner', 'minimum' => -1000, 'maximum' => 1000, 'digits' => 2, 'suffix' => ' %']],
-                    ['caption' => 'Rolle (bei Link auf Variable)', 'name' => 'Role', 'width' => '170px', 'edit' => ['type' => 'Select', 'options' => $roleOptions]],
-                    ['caption' => 'Leistung übersteuern', 'name' => 'PowerID', 'width' => '200px', 'edit' => ['type' => 'SelectVariable']],
-                    ['caption' => 'Bezug übersteuern', 'name' => 'EnergyImportID', 'width' => '200px', 'edit' => ['type' => 'SelectVariable']],
-                    ['caption' => 'Einspeisung übersteuern', 'name' => 'EnergyExportID', 'width' => '200px', 'edit' => ['type' => 'SelectVariable']],
-                    ['caption' => 'Schalter übersteuern', 'name' => 'SwitchID', 'width' => '200px', 'edit' => ['type' => 'SelectVariable']],
-                    ['caption' => 'nicht schalten', 'name' => 'NoSwitch', 'width' => '110px', 'edit' => ['type' => 'CheckBox']],
-                    ['caption' => 'Objekt-ID', 'name' => 'MemberID', 'width' => '90px', 'save' => true],
+                    ['caption' => 'Mitglied', 'name' => 'Name', 'width' => '200px', 'add' => '', 'edit' => ['type' => 'ValidationTextBox']],
+                    ['caption' => 'Ziel', 'name' => 'Target', 'width' => '220px', 'add' => 0, 'edit' => ['type' => 'SelectObject']],
+                    ['caption' => 'Erkannt', 'name' => 'Found', 'width' => '360px', 'add' => '🆕 wird mit „Übernehmen“ verknüpft'],
+                    ['caption' => 'Anteil (%)', 'name' => 'Factor', 'width' => '130px', 'add' => 100, 'edit' => ['type' => 'NumberSpinner', 'minimum' => -1000, 'maximum' => 1000, 'digits' => 2, 'suffix' => ' %']],
+                    ['caption' => 'Rolle (bei Link auf Variable)', 'name' => 'Role', 'width' => '170px', 'add' => '', 'edit' => ['type' => 'Select', 'options' => $roleOptions]],
+                    ['caption' => 'Leistung übersteuern', 'name' => 'PowerID', 'width' => '200px', 'add' => 0, 'edit' => ['type' => 'SelectVariable']],
+                    ['caption' => 'Bezug übersteuern', 'name' => 'EnergyImportID', 'width' => '200px', 'add' => 0, 'edit' => ['type' => 'SelectVariable']],
+                    ['caption' => 'Einspeisung übersteuern', 'name' => 'EnergyExportID', 'width' => '200px', 'add' => 0, 'edit' => ['type' => 'SelectVariable']],
+                    ['caption' => 'Schalter übersteuern', 'name' => 'SwitchID', 'width' => '200px', 'add' => 0, 'edit' => ['type' => 'SelectVariable']],
+                    ['caption' => 'nicht schalten', 'name' => 'NoSwitch', 'width' => '110px', 'add' => false, 'edit' => ['type' => 'CheckBox']],
+                    ['caption' => 'Objekt-ID', 'name' => 'MemberID', 'width' => '90px', 'add' => 0, 'save' => true],
+                    // Unsichtbare Ausgangswerte für den Abgleich, siehe TreeFormRows().
+                    ['caption' => 'OrigName', 'name' => 'OrigName', 'width' => '0px', 'add' => '', 'save' => true, 'visible' => false],
+                    ['caption' => 'OrigTarget', 'name' => 'OrigTarget', 'width' => '0px', 'add' => 0, 'save' => true, 'visible' => false],
+                    ['caption' => 'Form', 'name' => 'Form', 'width' => '0px', 'add' => true, 'save' => true, 'visible' => false],
                 ],
             ];
         } elseif (!$migration && count($nodes) > 0) {
@@ -3394,11 +3583,12 @@ class MeterHubVirtual extends IPSModule
             $meterItems[] = ['type' => 'Button', 'caption' => '🏷️  Geräte-Familie erkennen und übernehmen', 'onClick' => 'echo MHUBV_AddDeviceFamily($id, $FamilyRoot);'];
 
             if ($tree) {
-                $meterItems[] = ['type' => 'Label', 'caption' => '━━━ 4. Die Objektbaum-Alternative ━━━'];
-                $meterItems[] = ['type' => 'Label', 'caption' => '🔗 Im Objektbaum eine Verknüpfung auf das Gerät (oder eine einzelne Variable) anlegen und unter diese Instanz legen — wird beim nächsten Berechnungstakt automatisch Mitglied, ohne „Übernehmen". Bei einem Link auf eine einzelne Variable ohne erkennbare Einheit in der Tabelle unten die „Rolle" setzen.'];
+                $meterItems[] = ['type' => 'Label', 'caption' => '━━━ 4. Direkt in der Tabelle oder im Objektbaum ━━━'];
+                $meterItems[] = ['type' => 'Label', 'caption' => '✏️ In der Tabelle unten: „Hinzufügen" und in „Ziel" ein Gerät, eine Variable oder einen anderen virtuellen Zähler wählen; Zeilen löschen, per Drag & Drop umsortieren, „Mitglied" umbenennen oder das „Ziel" ändern — mit „Übernehmen" legt das Modul die Links im Objektbaum entsprechend an, löscht, sortiert und benennt sie. Gelöscht werden dabei nur Links, nie ein Gerät.'];
+                $meterItems[] = ['type' => 'Label', 'caption' => '🔗 Oder im Objektbaum selbst eine Verknüpfung unter diese Instanz legen — wird beim nächsten Berechnungstakt automatisch Mitglied, ohne „Übernehmen". Bei einem Link auf eine einzelne Variable ohne erkennbare Einheit in der Tabelle die „Rolle" setzen.'];
                 $meterItems[] = ['type' => 'Label', 'caption' => '━━━ Danach, für jedes Mitglied ━━━'];
                 $meterItems[] = ['type' => 'Label', 'caption' => '📐 „Anteil (%)" in der Tabelle unten: 100 = voll addieren, −100 = voll abziehen, jeder Wert dazwischen ein Teil-Anteil. Leistung/Bezug/Einspeisung werden am Ziel automatisch gefunden; nur wenn das nicht passt, eine Variable in der jeweiligen „übersteuern"-Spalte wählen (leer = automatisch).'];
-                $meterItems[] = ['type' => 'Label', 'caption' => '↕️ Reihenfolge und Namen der Mitglieder ändern sich im Objektbaum (Position bzw. Name des Links) — die Tabelle folgt automatisch.'];
+                $meterItems[] = ['type' => 'Label', 'caption' => '↕️ Reihenfolge und Namen: in der Tabelle (wirkt mit „Übernehmen") oder im Objektbaum (Position bzw. Name des Links) — beides bleibt synchron. Was du im Objektbaum änderst, während das Formular offen ist, überschreibt das Formular nicht; es ändert nur, was du in der Tabelle selbst geändert hast.'];
             } else {
                 $meterItems[] = ['type' => 'Label', 'caption' => '━━━ 4. Die Handarbeit-Alternative ━━━'];
                 $meterItems[] = ['type' => 'Label', 'caption' => '➕ Unter der Tabelle auf „Hinzufügen" klicken, dann in „Leistung"/„Bezug"/„Einspeisung" mit dem eingebauten Symcon-Variablenpicker die passende Variable wählen — für Einzelfälle, die die automatischen Alternativen nicht (richtig) finden.'];

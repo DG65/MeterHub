@@ -1516,9 +1516,9 @@ $form35 = json_decode($a->GetConfigurationForm(), true);
 $list35 = t35_find($form35, 'MemberSettings');
 $found35 = array_column($list35['values'] ?? [], 'Found');
 check('35e: Formular-Liste zeigt „Ziel fehlt"', count(array_filter($found35, fn($f) => str_contains($f, 'Ziel fehlt'))) === 1, json_encode($found35));
+$cols35 = array_column($list35['columns'] ?? [], null, 'name');
 check('35e: Liste lädt nicht die gespeicherten Zeilen, MemberID wird mitgespeichert', ($list35['loadValuesFromConfiguration'] ?? true) === false
-    && in_array(['caption' => 'Objekt-ID', 'name' => 'MemberID', 'width' => '90px', 'save' => true], $list35['columns'] ?? [], true));
-check('35e: kein Hinzufügen/Löschen in der Liste (das passiert im Objektbaum)', ($list35['add'] ?? true) === false && ($list35['delete'] ?? true) === false);
+    && ($cols35['MemberID']['save'] ?? false) === true && !isset($cols35['MemberID']['edit']));
 check('35e: Formel-Tabelle „Nodes" gibt es im Baum-Modus nicht', t35_find($form35, 'Nodes') === null);
 IPS_DeleteLink($lDead);
 $a = t35_apply($aIid);
@@ -1645,6 +1645,56 @@ check('35l: Formular speichert den automatischen Schalter NICHT als Übersteueru
 IPS_SetProperty($dIid, 'MemberSettings', json_encode([['MemberID' => $lFlur, 'NoSwitch' => true], ['MemberID' => $lZwei, 'SwitchID' => 4923]]));
 $d = t35_apply($dIid);
 check('35l: „nicht schalten" und Übersteuerung wirken', array_column(t35_call($d, 'Nodes'), 'switch') === [4902, 0, 4923, 4932], json_encode(array_column(t35_call($d, 'Nodes'), 'switch')));
+
+echo "  35m) Mitglieder im Formular bearbeiten (Dietmars Wunsch 11.09.2026): hinzufügen, löschen, umsortieren, umbenennen, Ziel ändern\n";
+check('35m: Test-IDs 4950/4960 frei', !IPS_ObjectExists(4950) && !IPS_ObjectExists(4960));
+meter(4950, 'Sauna', 3000.0, 800.0);
+$eIid = IPS_CreateInstance(T35_GV);
+IPS_SetParent($eIid, 10);
+$lE1 = t35_link($eIid, 200, 'WP', 100);
+$lE2 = t35_link($eIid, 300, 'WB', 110);
+vari(4960, 'Direkter Zähler', $eIid, '', 'MHB.W', 55.0);   // direkt (kein Link) einsortiert
+IPS_SetPosition(4960, 120);
+$e = t35_apply($eIid);
+$listE = t35_find(json_decode($e->GetConfigurationForm(), true), 'MemberSettings');
+check('35m: Tabelle erlaubt Hinzufügen, Löschen und Umsortieren', ($listE['add'] ?? false) === true && ($listE['delete'] ?? false) === true && ($listE['changeOrder'] ?? false) === true);
+$colsE = array_column($listE['columns'] ?? [], null, 'name');
+check('35m: Name und Ziel editierbar, Ausgangswerte unsichtbar mitgespeichert', isset($colsE['Name']['edit'], $colsE['Target']['edit'])
+    && ($colsE['OrigName']['save'] ?? false) === true && ($colsE['OrigName']['visible'] ?? true) === false && ($colsE['Form']['save'] ?? false) === true);
+$rowsE = array_column($listE['values'], null, 'MemberID');
+// Nutzer: WB und den direkten Zähler löschen, WP umbenennen, neue Zeile
+// „Garage" (4700) mit 50 % ganz nach oben, dazu eine Doppel-Zeile auf 200
+// und eine neue Zeile ohne Ziel.
+$newRow = ['MemberID' => 0, 'Name' => '', 'Target' => 4700, 'OrigName' => '', 'OrigTarget' => 0, 'Form' => true, 'Factor' => 50, 'Role' => '', 'PowerID' => 0, 'EnergyImportID' => 0, 'EnergyExportID' => 0, 'SwitchID' => 0, 'NoSwitch' => false];
+$wpRow = array_merge($rowsE[$lE1], ['Name' => 'Wärmepumpe neu']);
+IPS_SetProperty($eIid, 'MemberSettings', json_encode([$newRow, $wpRow, array_merge($newRow, ['Target' => 200, 'Factor' => 100]), array_merge($newRow, ['Target' => 0])]));
+$e = t35_apply($eIid);
+$notesE = $e->ReadAttributeString('ReconcileNotes');
+check('35m: gelöschte Link-Zeile löscht den Link', !IPS_ObjectExists($lE2));
+check('35m: direkt einsortierter Zähler wird NICHT gelöscht, sondern gemeldet', IPS_ObjectExists(4960) && str_contains($notesE, 'nie gel'), $notesE);
+check('35m: neuer Link angelegt, umbenannt, Reihenfolge wie im Formular', t35_names($e) === ['Garage', 'Wärmepumpe neu', 'Direkter Zähler'], json_encode(t35_names($e), JSON_UNESCAPED_UNICODE));
+check('35m: Anteil der neuen Zeile gilt (0,5 × 700 + 1200 + 55)', abs((float)t35_out($eIid, 'power') - 1605.0) < 0.01, (string)t35_out($eIid, 'power'));
+check('35m: Doppel-Zeile und Zeile ohne Ziel gemeldet statt angelegt', str_contains($notesE, 'bereits Mitglied') && str_contains($notesE, 'ohne Ziel') && count(t35_call($e, 'TreeMembers')) === 3, $notesE);
+$formLabels = json_encode(json_decode($e->GetConfigurationForm(), true), JSON_UNESCAPED_UNICODE);
+check('35m: Hinweise stehen im Formular', str_contains($formLabels, 'Beim letzten'));
+
+IPS_SetName($lE1, 'Im Baum umbenannt');
+$e = t35_apply($eIid);
+check('35m: spätere Umbenennung im Objektbaum wird nicht vom alten Formular-Stand überschrieben', IPS_GetName($lE1) === 'Im Baum umbenannt');
+$resSauna = $e->AddDevice(4950);
+$e = $GLOBALS['MODOBJ'][$eIid];
+check('35m: interne Speicherung (AddDevice) spielt keinen alten Formular-Stand zurück', IPS_GetName($lE1) === 'Im Baum umbenannt' && count(t35_call($e, 'TreeMembers')) === 4, $resSauna);
+check('35m: Anteil der Formular-Zeile bleibt dabei erhalten (+3000 Sauna)', abs((float)t35_out($eIid, 'power') - 4605.0) < 0.01, (string)t35_out($eIid, 'power'));
+
+$rowsE2 = t35_find(json_decode($e->GetConfigurationForm(), true), 'MemberSettings')['values'];
+foreach ($rowsE2 as &$r) { if ($r['MemberID'] === $lE1) { $r['Target'] = 4920; } }
+unset($r);
+array_unshift($rowsE2, array_pop($rowsE2));   // Drag & Drop: letzte Zeile (Sauna) nach oben
+IPS_SetProperty($eIid, 'MemberSettings', json_encode($rowsE2));
+$e = t35_apply($eIid);
+check('35m: Ziel geändert (Link zeigt jetzt auf den Zweikanal-Aktor)', (IPS_GetLink($lE1)['TargetID'] ?? 0) === 4920);
+check('35m: Umsortieren setzt die Positionen', t35_names($e) === ['Sauna', 'Garage', 'Im Baum umbenannt', 'Direkter Zähler'], json_encode(t35_names($e), JSON_UNESCAPED_UNICODE));
+check('35m: ohne Probleme keine Hinweise', $e->ReadAttributeString('ReconcileNotes') === '');
 
 echo "\n" . ($fails === 0 ? "ALLE PRÜFUNGEN BESTANDEN\n" : "$fails PRÜFUNG(EN) FEHLGESCHLAGEN\n");
 exit($fails === 0 ? 0 : 1);

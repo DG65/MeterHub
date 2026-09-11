@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.26.0-beta.1 (2026-09-11)
+
+- **✏️ MeterHubVirtual: Mitglieder im Formular bearbeiten.** Dietmars Wunsch: „die
+  Mitglieder im Virtual Meter innerhalb des Formulars bearbeitbar machen". Die
+  Mitglieder-Tabelle des Baum-Modus erlaubt jetzt Hinzufügen (neue Spalte „Ziel":
+  Gerät, Variable oder anderer virtueller Zähler), Löschen, Umsortieren per Drag & Drop,
+  Umbenennen und das Ziel zu ändern. Mit „Übernehmen" legt das Modul die Links im
+  Objektbaum entsprechend an, löscht, sortiert und benennt sie.
+  - Geändert wird nur, was in der Tabelle geändert wurde — eine zwischenzeitliche
+    Umbenennung oder ein neuer Link im Objektbaum wird nicht überschrieben bzw.
+    gelöscht.
+  - Gelöscht werden nur Links. Ein Gerät, das direkt unter der Instanz hängt, bleibt
+    und wird gemeldet.
+  - Doppelte Ziele, Selbstbezug, Kreisverweise und Zeilen ohne Ziel werden nicht
+    übernommen, sondern oben in „Prüfung & Vorschau" gemeldet.
+  - Prüfstand Block 35m.
+- **🔧 Fix (seit 0.25.0):** Eine Variable, die direkt (nicht als Link) unter einer
+  MeterHubVirtual-Instanz einsortiert war, wurde fälschlich als Kreisverweis gemeldet
+  und blockierte die ganze Instanz. Echte eigene Ausgaben werden weiterhin abgewiesen.
+
 ## 0.25.1-beta.1 (2026-09-11)
 
 Drei Befunde der Dashboard-Sitzung aus Dietmars Live-Anlage („Licht EG"/„Licht OG",
