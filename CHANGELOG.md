@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.26.1-beta.1 (2026-09-11)
+
+- **🔧 Fix: falsche Leistung bei Geräten ohne MeterHub-Idents (z. B. Wallboxen).**
+  Dashboard-Befund aus Dietmars Anlage: „KFZ-Ladestationen" zählte von WB 1 nur
+  „Leistung L2" statt der Gesamt-Ladeleistung — beim dreiphasigen Laden ein Drittel.
+  Ursache: die generische Suche nahm die erste W-Variable in Baumreihenfolge, und bei
+  WB 1 lag die Kategorie „Phasen" vorn. Jetzt, in dieser Reihenfolge:
+  - Bietet das Ziel einen `*_GetFunctions`-Vertrag an (ChargerHub, HeishaMon …,
+    erkannt über das Modul-Präfix), gelten dessen Leistung und Zähler — dieselben
+    Werte, die das Modul selbst an EMS und Dashboard meldet. Nicht-kumulative Energie
+    (`energyKind` ≠ counter) wird nicht übernommen.
+  - Der Ident `power` gilt wie `power_total` als Gesamtleistung.
+  - Die Suche rankt statt „erster Treffer": Gesamtwert vor Ladevorgangs-/Tageswert vor
+    Phasenwert, dann weniger tief verschachtelt. Gibt es mehrere gleichwertige
+    Gesamtwerte, erscheint im Baum-Modus eine Warnung mit der getroffenen Wahl.
+  - Für MeterHub- und MeterHubVirtual-Ziele bleibt es bei den Idents.
+- Prüfstand Block 35n.
+
 ## 0.26.0-beta.1 (2026-09-11)
 
 - **✏️ MeterHubVirtual: Mitglieder im Formular bearbeiten.** Dietmars Wunsch: „die

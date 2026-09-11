@@ -70,7 +70,7 @@ class MeterHubVirtual extends IPSModule
     // Formular-Konvention des Verbunds (SUITE.md „Einheitliche Formular-
     // Optik", Referenz InverterHub). NEWS_VERSION korrespondiert mit dem
     // CHANGELOG-Eintrag, der den jeweiligen Sprung erklärt.
-    private const NEWS_VERSION = '0.26.0';
+    private const NEWS_VERSION = '0.26.1';
 
     public function Create()
     {
@@ -281,6 +281,7 @@ class MeterHubVirtual extends IPSModule
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
                 ['type' => 'Label', 'caption' => '• 🌳 Neu: Mitglieder direkt im Objektbaum — alles, was als Verknüpfung (Link) oder direkt unter dieser Instanz hängt, wird automatisch Mitglied, in der Reihenfolge seiner Position dort. Neue Instanzen starten so; gelöschte Geräte fallen sofort als „Ziel fehlt" auf statt still als Leiche weiterzuleben.'],
+                ['type' => 'Label', 'caption' => '• 🔧 Fix: bei Geräten ohne MeterHub-Kennung (z. B. Wallboxen) konnte statt der Gesamtleistung eine einzelne Phase gewählt werden. Jetzt gelten zuerst die Werte, die das Gerätemodul selbst meldet; sonst Gesamtwert vor Phasenwert, mehrdeutige Fälle werden gemeldet. Bitte die „Erkannt"-Spalte der eigenen Instanzen einmal ansehen.'],
                 ['type' => 'Label', 'caption' => '• ✏️ Mitglieder direkt in der Tabelle bearbeiten: hinzufügen (Spalte „Ziel“), löschen, per Drag & Drop umsortieren, umbenennen, Ziel ändern — mit „Übernehmen“ werden die Links im Objektbaum entsprechend angepasst. Gelöscht werden nur Links, nie Geräte.'],
                 ['type' => 'Label', 'caption' => '• 🔀 Schalter der verknüpften Geräte werden automatisch erkannt (Gruppe schalten ohne Einstellung); mehrdeutige Geräte werden gemeldet. Pro Mitglied lässt sich übersteuern oder „nicht schalten" wählen. Links ohne eigenen Namen heißen wie ihr Ziel.'],
                 ['type' => 'Label', 'caption' => '• 🌳 Verschachteln: einen Link auf eine andere virtuelle Zähler-Instanz unterhängen (z. B. mehrere Wallbox-Zähler unter „Fahrzeugbeladung"). Kreisverweise werden erkannt und blockiert.'],
@@ -517,6 +518,7 @@ class MeterHubVirtual extends IPSModule
         foreach ($this->TreeMembers() as $m) {
             $s = $settings[$m['member']] ?? [];
             $auto = ['power' => 0, 'imp' => 0, 'exp' => 0];
+            $meterNote = '';
             if (!$m['broken']) {
                 if ((int)IPS_GetObject($m['target'])['ObjectType'] === 2) {
                     $role = (string)($s['Role'] ?? '');
@@ -530,6 +532,9 @@ class MeterHubVirtual extends IPSModule
                 } else {
                     $met = $this->MetersOfDevice($m['target']);
                     $auto = ['power' => $met['power'], 'imp' => $met['imp'], 'exp' => $met['exp']];
+                    if (!empty($met['extraPower']) && (int)($s['PowerID'] ?? 0) <= 0) {
+                        $meterNote = 'mehrere gleichwertige Leistungswerte am Gerät (' . implode(', ', array_map('IPS_GetName', array_merge([$met['power']], $met['extraPower']))) . ') — gewählt: „' . IPS_GetName($met['power']) . '“';
+                    }
                 }
             }
             $pick = function (string $field, string $key) use ($s, $auto): int {
@@ -543,6 +548,7 @@ class MeterHubVirtual extends IPSModule
             }
             $out[] = [
                 'switchNote' => $switchNote,
+                'meterNote'  => $meterNote,
                 'name'   => $m['name'],
                 'factor' => array_key_exists('Factor', $s) ? (float)$s['Factor'] : 100.0,
                 'power'  => $pick('power', 'PowerID'),
@@ -1473,6 +1479,9 @@ class MeterHubVirtual extends IPSModule
                 $warnings[] = "$label: das verknüpfte Ziel existiert nicht mehr — geht mit 0 in die Summe ein. Den Link im Objektbaum löschen oder auf ein vorhandenes Gerät umbiegen.";
             } elseif ($n['power'] <= 0 && $n['imp'] <= 0 && $n['exp'] <= 0) {
                 $warnings[] = "$label: am Ziel wurde weder eine Leistung (W) noch ein Energiezähler (kWh) gefunden — geht mit 0 in die Summe ein" . ($n['switch'] > 0 ? ', wird aber mitgeschaltet' : '') . '. Unten in der Mitglieder-Tabelle lässt sich ein Datenpunkt von Hand zuordnen.';
+            }
+            if (($n['meterNote'] ?? '') !== '') {
+                $warnings[] = "$label: " . $n['meterNote'] . ' — falls das nicht die Gesamtleistung ist, in der Mitglieder-Tabelle „Leistung übersteuern" setzen.';
             }
             if (($n['switchNote'] ?? '') !== '') {
                 $warnings[] = "$label: Schalter nicht eindeutig — " . $n['switchNote'] . ' (Spalte „Schalter übersteuern", oder „nicht schalten").';
@@ -2435,6 +2444,14 @@ class MeterHubVirtual extends IPSModule
             ];
         }
 
+        // Bietet das Ziel selbst einen *_GetFunctions-Vertrag an (ChargerHub,
+        // HeishaMon …), weiß es am besten, welche Variable die Gesamtleistung
+        // und welcher Zähler kumulativ ist — Dashboard-Befund 11.09.2026.
+        $contract = $this->ContractMetersOf($deviceId);
+        if ($contract !== null) {
+            return $contract;
+        }
+
         $power = $this->FindByIdent($deviceId, 'power_total');
         // Sepps Live-Fund 02.09.2026: eine MeterHubVirtual-Instanz als Quelle
         // für eine ANDERE MeterHubVirtual-Instanz übernehmen ("mehrstufige
@@ -2446,38 +2463,160 @@ class MeterHubVirtual extends IPSModule
         // der generischen Fallback-Suche unten ab, sobald Bezug/Einspeisung
         // schon etwas gefunden haben (Zeile "if ($power > 0 || …)").
         if ($power === 0) {
-            $o = @IPS_GetObject($deviceId);
-            if ($o && $o['ObjectType'] === 1 && (@IPS_GetInstance($deviceId)['ModuleInfo']['ModuleID'] ?? '') === self::GUID_VIRTUAL) {
-                $power = $this->FindByIdent($deviceId, 'power');
-            }
+            // „power" wie power_total: so heißt die Ausgabe von
+            // MeterHubVirtual (Sepps Fund 02.09.2026) und die Gesamt-
+            // Ladeleistung von ChargerHub (Dashboard-Befund 11.09.2026) —
+            // ein Ident ist eindeutiger als jede Suche.
+            $power = $this->FindByIdent($deviceId, 'power');
         }
         $imp   = $this->FindByIdent($deviceId, 'energy_import');
         $exp   = $this->FindByIdent($deviceId, 'energy_export');
-        if ($power > 0 || $imp > 0 || $exp > 0) {
-            return ['power' => $power, 'imp' => $imp, 'exp' => $exp, 'extra' => []];
+        $guid  = (int)(@IPS_GetObject($deviceId)['ObjectType'] ?? -1) === 1
+            ? (string)(@IPS_GetInstance($deviceId)['ModuleInfo']['ModuleID'] ?? '') : '';
+        // Eigene Module sind über ihre Idents vollständig beschrieben — keine
+        // generische Suche (sie fände z. B. die „Energie hochgerechnet"-
+        // Variablen einer virtuellen Instanz, die zu deren Mitgliedern gehören).
+        if (($power > 0 && ($imp > 0 || $exp > 0)) || in_array($guid, [self::GUID_VIRTUAL, self::GUID_METER], true)) {
+            return ['power' => $power, 'imp' => $imp, 'exp' => $exp, 'extra' => [], 'extraPower' => []];
         }
 
-        $power = 0;
-        $kwh   = [];
-        $stack = [$deviceId];
+        // Generische Suche für das, was die Idents nicht geliefert haben —
+        // deterministisch gerankt statt „erste Variable in Baumreihenfolge".
+        // Dashboard-Befund 11.09.2026: bei ChargerHub WB 1 lag die Kategorie
+        // „Phasen" in der Suchreihenfolge vorn, gewählt wurde „Leistung L2"
+        // (ein Drittel beim dreiphasigen Laden) statt der Gesamtleistung.
+        $powers = [];
+        $kwh    = [];
+        $stack  = [[$deviceId, 0]];
         while ($stack) {
-            foreach (IPS_GetChildrenIDs((int)array_pop($stack)) as $cid) {
+            [$pid, $depth] = array_pop($stack);
+            foreach (IPS_GetChildrenIDs((int)$pid) as $cid) {
                 $o = IPS_GetObject($cid);
                 if ($o['ObjectType'] === 2) {
                     $kind = $this->Classify($cid);
-                    if ($kind === 'power' && $power === 0) {
-                        $power = $cid;
+                    if ($kind === 'power') {
+                        $powers[] = [$cid, $depth, $this->MeterPenalty($o), (int)($o['ObjectPosition'] ?? 0)];
                     } elseif ($kind === 'import') {
-                        $kwh[] = $cid;
+                        $kwh[] = [$cid, $depth, $this->MeterPenalty($o), (int)($o['ObjectPosition'] ?? 0)];
                     }
                 } elseif ($o['ObjectType'] === 0) {
                     // Kategorien innerhalb DESSELBEN Geräts weiter durchsuchen —
                     // nicht in verschachtelte fremde Instanzen hineingehen.
-                    $stack[] = $cid;
+                    $stack[] = [$cid, $depth + 1];
                 }
             }
         }
-        return ['power' => $power, 'imp' => $kwh[0] ?? 0, 'exp' => 0, 'extra' => array_slice($kwh, 1)];
+        // Rang: Gesamtwert vor Ladevorgangs-/Tageswert vor Phase, dann
+        // weniger tief verschachtelt, dann Position, dann Objekt-ID.
+        $rank = fn(array $a, array $b): int => [$a[2], $a[1], $a[3], $a[0]] <=> [$b[2], $b[1], $b[3], $b[0]];
+        usort($powers, $rank);
+        usort($kwh, $rank);
+        $extraPower = [];
+        if ($power === 0 && $powers) {
+            $power = $powers[0][0];
+            // Weitere GLEICHWERTIGE Gesamtwerte (kein Phasenwert, gleiche
+            // Tiefe) nennen statt still zu entscheiden.
+            foreach (array_slice($powers, 1) as $p) {
+                if ($p[2] === 0 && $powers[0][2] === 0 && $p[1] === $powers[0][1]) {
+                    $extraPower[] = $p[0];
+                }
+            }
+        }
+        $extra = [];
+        if ($imp === 0 && $exp === 0 && $kwh) {
+            $imp   = $kwh[0][0];
+            $extra = array_column(array_slice($kwh, 1), 0);
+        }
+        return ['power' => $power, 'imp' => $imp, 'exp' => $exp, 'extra' => $extra, 'extraPower' => $extraPower];
+    }
+
+    /**
+     * Nachrang eines Messwerts in der generischen Suche: 2 = Phasenwert
+     * (Ident/Name mit L1/L2/L3 oder „Phase"), 1 = Ladevorgangs-/Tages-/
+     * Zwischenwert (springt zurück, taugt nicht als Zählerstand), 0 = Gesamtwert.
+     */
+    private function MeterPenalty(array $o): int
+    {
+        $txt = mb_strtolower((string)$o['ObjectIdent'] . ' ' . (string)$o['ObjectName']);
+        if (preg_match('/(^|[^a-z0-9])(l[123]|phase\w*)([^a-z0-9]|$)/u', $txt)) {
+            return 2;
+        }
+        if (preg_match('/session|sitzung|ladevorgang|zwischen|heute|today|tages/u', $txt)) {
+            return 1;
+        }
+        return 0;
+    }
+
+    /**
+     * Datenpunkte aus dem *_GetFunctions-Vertrag des Ziels, falls es einen
+     * anbietet — generisch über das Modul-Präfix (IPS_GetModule()['Prefix'],
+     * laut SDK-Doku seit 6.1), also für jedes NRG-Stack-Modul, ohne dessen
+     * Namen hier zu kennen. Versteht beide Schreibweisen im Verbund
+     * (powerID/energyImportID bzw. HeishaMons PowerID/EnergyID). Nur bei
+     * GENAU einer Zuordnung mit Datenpunkt — mehrere (z. B. Verdichter und
+     * Heizstab) wären Raten, dann entscheidet die Suche. Ein fehlerhafter
+     * Partner-Vertrag degradiert zu null statt die Instanz abzubrechen
+     * (Lehre aus dem MigrationsHub-Vorfall 30.08.2026). Eigene Module
+     * (MeterHub, MeterHubVirtual) laufen weiter über ihre Idents.
+     */
+    private function ContractMetersOf(int $instanceId): ?array
+    {
+        if ((int)(@IPS_GetObject($instanceId)['ObjectType'] ?? -1) !== 1) {
+            return null;
+        }
+        $guid = (string)(@IPS_GetInstance($instanceId)['ModuleInfo']['ModuleID'] ?? '');
+        if ($guid === '' || $guid === self::GUID_VIRTUAL || $guid === self::GUID_METER) {
+            return null;
+        }
+        $prefix = (string)(@IPS_GetModule($guid)['Prefix'] ?? '');
+        $fn = $prefix . '_GetFunctions';
+        if ($prefix === '' || !function_exists($fn)) {
+            return null;
+        }
+        try {
+            $res = $fn($instanceId);
+        } catch (\Throwable $e) {
+            return null;
+        }
+        if (is_string($res)) {
+            $res = json_decode($res, true);
+        }
+        if (!is_array($res) || $res === []) {
+            return null;
+        }
+        if (isset($res['assignments']) && is_array($res['assignments'])) {
+            $entries = $res['assignments'];
+        } else {
+            $entries = array_keys($res) === range(0, count($res) - 1) ? $res : [$res];
+        }
+        $found = [];
+        foreach ($entries as $e) {
+            if (!is_array($e)) {
+                continue;
+            }
+            $m = [
+                'power' => (int)($e['powerID'] ?? $e['PowerID'] ?? 0),
+                'imp'   => (int)($e['energyImportID'] ?? $e['EnergyImportID'] ?? $e['EnergyID'] ?? 0),
+                'exp'   => (int)($e['energyExportID'] ?? $e['EnergyExportID'] ?? 0),
+            ];
+            // Nur kumulative Zählerstände taugen als Energie (Vertrags-Regel 3).
+            if ((string)($e['energyKind'] ?? 'counter') !== 'counter') {
+                $m['imp'] = 0;
+                $m['exp'] = 0;
+            }
+            foreach ($m as $k => $vid) {
+                if ($vid > 0 && !IPS_VariableExists($vid)) {
+                    $m[$k] = 0;
+                }
+            }
+            if ($m['power'] > 0 || $m['imp'] > 0 || $m['exp'] > 0) {
+                $found[] = $m;
+            }
+        }
+        if (count($found) !== 1) {
+            return null;
+        }
+        return $found[0] + ['extra' => [], 'extraPower' => []];
     }
 
     /**

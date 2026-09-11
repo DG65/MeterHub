@@ -124,6 +124,11 @@ function IPS_GetInstanceListByModuleID($guid) {
 function IPS_GetInstance($iid) {
     return ['ModuleInfo' => ['ModuleID' => $GLOBALS['INSTMOD'][$iid] ?? '']];
 }
+// Modul-Präfix für die Vertragserkennung (ContractMetersOf(), 0.26.1) plus
+// ein ChargerHub-artiger Testvertrag.
+$GLOBALS['MODULES'] = [];
+function IPS_GetModule($guid) { return $GLOBALS['MODULES'][$guid] ?? ['ModuleID' => $guid, 'Prefix' => '']; }
+function TESTCHUB_GetFunctions($iid) { return $GLOBALS['CONTRACT'][$iid] ?? []; }
 function IPS_CreateInstance($guid) {
     $id = $GLOBALS['NEXTID']++;
     obj($id, 1, 'neue Instanz', 0);
@@ -1695,6 +1700,55 @@ $e = t35_apply($eIid);
 check('35m: Ziel geändert (Link zeigt jetzt auf den Zweikanal-Aktor)', (IPS_GetLink($lE1)['TargetID'] ?? 0) === 4920);
 check('35m: Umsortieren setzt die Positionen', t35_names($e) === ['Sauna', 'Garage', 'Im Baum umbenannt', 'Direkter Zähler'], json_encode(t35_names($e), JSON_UNESCAPED_UNICODE));
 check('35m: ohne Probleme keine Hinweise', $e->ReadAttributeString('ReconcileNotes') === '');
+
+echo "  35n) Dashboard-Befund 11.09.2026: Wallbox-Gesamtleistung statt einer Phase — Vertrag des Ziels, Ident \"power\", Rangfolge\n";
+check('35n: Test-IDs 5000–5212 frei', !IPS_ObjectExists(5000) && !IPS_ObjectExists(5100) && !IPS_ObjectExists(5200) && !IPS_ObjectExists(5210));
+$GLOBALS['MODULES']['{TEST-CHUB}'] = ['ModuleID' => '{TEST-CHUB}', 'Prefix' => 'TESTCHUB'];
+function t35_wallbox($iid, $guid, $label) {
+    obj($iid, 1, $label, 10);
+    $GLOBALS['INSTMOD'][$iid] = $guid;
+    obj($iid + 1, 0, 'Gerät', $iid);
+    vari($iid + 2, 'Ladeleistung', $iid + 1, 'power', 'MHB.W', 11000.0);
+    vari($iid + 3, 'Energie gesamt', $iid + 1, 'energy_total', 'MHB.kWh', 1234.0);
+    vari($iid + 4, 'Energie Ladevorgang', $iid + 1, 'energy_session', 'MHB.kWh', 5.0);
+    obj($iid + 5, 0, 'Phasen', $iid);   // zuletzt angelegt — die alte Suche nahm sie zuerst
+    vari($iid + 6, 'Leistung L1', $iid + 5, 'power_l1', 'MHB.W', 3700.0);
+    vari($iid + 7, 'Leistung L2', $iid + 5, 'power_l2', 'MHB.W', 3650.0);
+    vari($iid + 8, 'Leistung L3', $iid + 5, 'power_l3', 'MHB.W', 3650.0);
+}
+t35_wallbox(5000, '{TEST-CHUB}', 'WB 1');
+$GLOBALS['CONTRACT'][5000] = [['function' => 'charger', 'powerID' => 5002, 'energyImportID' => 5003, 'measured' => true]];
+$mWb = t35_call($a, 'MetersOfDevice', 5000);
+check('35n: Vertrag des Link-Ziels gewinnt (Gesamtleistung + Gesamtzähler)', $mWb['power'] === 5002 && $mWb['imp'] === 5003, json_encode($mWb));
+$GLOBALS['CONTRACT'][5000] = [['function' => 'charger', 'powerID' => 5002, 'energyImportID' => 5004, 'energyKind' => 'interval']];
+$mWbI = t35_call($a, 'MetersOfDevice', 5000);
+check('35n: Vertrag mit energyKind "interval" liefert keinen Zähler', $mWbI['power'] === 5002 && $mWbI['imp'] === 0, json_encode($mWbI));
+$GLOBALS['CONTRACT'][5000] = [['function' => 'charger', 'powerID' => 5002, 'energyImportID' => 5003]];
+t35_wallbox(5100, '{TEST-NOCONTRACT}', 'WB ohne Vertrag');
+$mNo = t35_call($a, 'MetersOfDevice', 5100);
+check('35n: ohne Vertrag: Ident "power" statt Phase, Gesamtzähler vor Ladevorgangs-Zähler', $mNo['power'] === 5102 && $mNo['imp'] === 5103, json_encode($mNo));
+obj(5200, 1, 'Fremdgerät', 10);
+$GLOBALS['INSTMOD'][5200] = '{TEST-NOCONTRACT}';
+obj(5201, 0, 'Werte', 5200);
+vari(5202, 'Wirkleistung', 5201, '', 'MHB.W', 900.0);
+obj(5203, 0, 'Phasen', 5200);
+vari(5204, 'Leistung Phase 1', 5203, '', 'MHB.W', 300.0);
+$mGen = t35_call($a, 'MetersOfDevice', 5200);
+check('35n: generische Suche: Phasenwert nachrangig, unabhängig von der Kategorie-Reihenfolge', $mGen['power'] === 5202, json_encode($mGen));
+obj(5210, 1, 'Zweikanal-Messer', 10);
+$GLOBALS['INSTMOD'][5210] = '{TEST-NOCONTRACT}';
+vari(5211, 'Leistung Kanal A', 5210, '', 'MHB.W', 100.0);
+vari(5212, 'Leistung Kanal B', 5210, '', 'MHB.W', 200.0);
+$mTwo = t35_call($a, 'MetersOfDevice', 5210);
+check('35n: zwei gleichwertige Gesamtwerte: erster gewählt, zweiter gemeldet', $mTwo['power'] === 5211 && $mTwo['extraPower'] === [5212], json_encode($mTwo));
+$fIid = IPS_CreateInstance(T35_GV);
+IPS_SetParent($fIid, 10);
+t35_link($fIid, 5000, 'WB 1', 100);
+t35_link($fIid, 5210, 'Zweikanal', 110);
+$f = t35_apply($fIid);
+check('35n: Summe mit der Gesamtleistung der Wallbox (11000 + 100)', abs((float)t35_out($fIid, 'power') - 11100.0) < 0.01, (string)t35_out($fIid, 'power'));
+$warnF = implode(' | ', t35_call($f, 'Warnings', t35_call($f, 'Nodes')));
+check('35n: Warnung für den mehrdeutigen Messer', str_contains($warnF, 'Zweikanal') && str_contains($warnF, 'mehrere gleichwertige'), $warnF);
 
 echo "\n" . ($fails === 0 ? "ALLE PRÜFUNGEN BESTANDEN\n" : "$fails PRÜFUNG(EN) FEHLGESCHLAGEN\n");
 exit($fails === 0 ? 0 : 1);

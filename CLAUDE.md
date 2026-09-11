@@ -915,6 +915,16 @@ Link zu. Unverifiziert: ob Symcon unsichtbare (`visible: false`) Spalten mit
 `save: true` wirklich speichert — laut Doku ja; fehlen sie live, greifen Umbenennen/
 Umzielen nicht (Hinzufügen/Löschen/Sortieren bleiben unberührt).
 
+**Datenpunkt-Wahl am Ziel (`MetersOfDevice()`, 0.26.1, Dashboard-Befund WB 1 → „Leistung
+L2"):** Reihenfolge (1) `*_GetFunctions`-Vertrag des Ziels, generisch über
+`IPS_GetModule($guid)['Prefix']` (laut SDK-Doku seit 6.1) + `function_exists()` +
+`try/catch`, nur bei genau einer Zuordnung mit Datenpunkt, `energyKind` ≠ counter →
+keine Energie; eigene Module (GUID_METER/GUID_VIRTUAL) ausgenommen; (2) Idents
+`power_total`/`power`, `energy_import`/`energy_export`; (3) gerankte Suche
+(`MeterPenalty()`: Gesamt 0 < Ladevorgang/Tag 1 < Phase 2, dann Tiefe, Position, ID) —
+nie „erster Treffer in Baumreihenfolge", die hängt nur von der Anlagereihenfolge der
+Kategorien ab. Gleichwertige Gesamtwerte → `extraPower` → Warnung im Baum-Modus.
+
 **Blockierend** (`TreeErrors()`): Selbstbezug, Mitglied liefert eigene Ausgabe, Kreisverweis
 über verschachtelte Instanzen (`ReferencesInstance()`, beide Mitglieder-Quellen, Tiefe
 10). **Nur Warnung:** toter Link, Mitglied ohne gefundenen Datenpunkt.
