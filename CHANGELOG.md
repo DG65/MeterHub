@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.27.4-beta.1 (2026-09-12)
+
+- Richtungsprüfung sofort aktuell: „Übernehmen“ und das Neuladen des Moduls verwerfen den
+  30-Minuten-Zwischenspeicher, und ein Zwischenspeicher mit anderer Vertragsversion gilt als
+  veraltet. Live gesehen: Nach dem Update auf 0.27.3 lieferten beide Anlagen noch das Ergebnis
+  des alten Codes (Vertrag 1.0). Nach dem Umschalten von „Bezug/Einspeisung vertauscht“ hätte die
+  alte Bewertung bis zu 30 min stehen bleiben können.
+
 ## 0.27.3-beta.1 (2026-09-12)
 
 - Diagnose-Vertrag: klargestellt, dass `correlation` immer normiert ist (+1 = Richtung passt,

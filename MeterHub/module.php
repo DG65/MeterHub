@@ -3179,6 +3179,11 @@ class MeterHub extends IPSModule
         // Vor RegisterVariables(): die tauscht danach Namen/Positionen passend
         // zu den neuen Idents mit.
         $this->SyncInvertLayout();
+        // Richtungsprüfung neu rechnen lassen: nach Übernehmen (z. B. PowerInvert
+        // umgeschaltet) und nach einem Modul-Update wäre der Zwischenspeicher
+        // sonst bis zu 30 min veraltet (live 12.09.2026: nach dem Update auf
+        // 0.27.3 lieferten beide Anlagen noch das Ergebnis des alten Codes).
+        $this->WriteAttributeString('DirectionDiag', '');
         $this->RegisterVariables();
 
         // Bereitschaft: Modbus-Zähler brauchen eine IP, Cloud-Zähler ein
@@ -5087,6 +5092,8 @@ class MeterHub extends IPSModule
 
     /** Unter dieser Leistung (W) ist eine Richtung nicht sicher bestimmbar. */
     private const DIR_MIN_W = 100.0;
+    /** Diagnose-Vertrag (1.1 = independent/referenceIDs). Ein Zwischenspeicher mit anderer Version gilt als veraltet. */
+    private const DIAG_CONTRACT = '1.1';
 
     /**
      * Bezug/Abgabe-Paare dieser Instanz, [Bezug-Ident => [Bezug-ID, Abgabe-ID]]:
@@ -5797,7 +5804,7 @@ class MeterHub extends IPSModule
     public function GetDiagnostics(): array
     {
         $cache = json_decode($this->ReadAttributeString('DirectionDiag'), true);
-        if (is_array($cache) && ($cache['checkedAt'] ?? 0) > time() - 1800) {
+        if (is_array($cache) && ($cache['contractVersion'] ?? '') === self::DIAG_CONTRACT && ($cache['checkedAt'] ?? 0) > time() - 1800) {
             return $cache;
         }
         $fresh = $this->ComputeDiagnostics();
@@ -5818,7 +5825,7 @@ class MeterHub extends IPSModule
     {
         $now = time();
         // 1.1 = independent/referenceIDs je Eintrag, PV als Summe mehrerer Zähler.
-        $out = ['contractVersion' => '1.1', 'instanceID' => $this->InstanceID, 'checkedAt' => $now, 'entries' => []];
+        $out = ['contractVersion' => self::DIAG_CONTRACT, 'instanceID' => $this->InstanceID, 'checkedAt' => $now, 'entries' => []];
         $acs = IPS_GetInstanceListByModuleID('{43192F0B-135B-4CE7-A0A7-1475603F3060}');
         if (count($acs) === 0) {
             return $out;
