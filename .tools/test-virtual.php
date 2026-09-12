@@ -1833,5 +1833,55 @@ for ($t = 0; $t <= 3600; $t += 5) {
 }
 check('36b: eine Stunde konstant 3,6 MW in 5-s-Schritten = 3600 kWh', abs($sum - 3600.0) < 1e-6, (string)$sum);
 
+echo "\n37) Zählerschutz und Energie-Archiv-Reparatur (Inexogy lieferte am 10./11.09.2026 Zählerstand 0 für eine Übertragungslücke)\n";
+$m37 = fn($name, ...$a) => (new ReflectionMethod('MeterHub', $name))->invoke(null, ...$a);
+check('37: Nullwert verworfen', $m37('CounterGuardStep', 10982.0, 0.0, 0) === [false, 0, 'null']);
+check('37: NaN verworfen', $m37('CounterGuardStep', 10982.0, NAN, 0)[0] === false);
+check('37: steigender Wert übernommen, Zähler der Rückschritte zurückgesetzt', $m37('CounterGuardStep', 10982.0, 10982.5, 3) === [true, 0, '']);
+check('37: gleicher Wert übernommen', $m37('CounterGuardStep', 10982.0, 10982.0, 0)[0] === true);
+check('37: einzelner Rückschritt verworfen', $m37('CounterGuardStep', 10982.0, 10981.9, 0) === [false, 1, 'rueckwaerts']);
+check('37: leerer Zähler (0) übernimmt den ersten Wert', $m37('CounterGuardStep', 0.0, 5.0, 0)[0] === true);
+$rej = 0;
+$res37 = null;
+for ($k = 0; $k < 30; $k++) {
+    $res37 = $m37('CounterGuardStep', 10982.0, 12.5, $rej);
+    $rej = $res37[1];
+    if ($res37[0]) { break; }
+}
+check('37: dauerhaft niedrigerer Stand wird nach 30 Lesungen als Zählertausch übernommen', $res37 === [true, 0, 'reset'] && $k === 29, json_encode([$res37, $k]));
+
+// Das echte Muster: 22:30 gültig, 22:45–08:30 Nullen (40), 08:45 gültig,
+// 09:00–10:45 Nullen (8), 11:00 und 11:15 gültig.
+$t37 = 1789072200; // 10.09.2026 22:30 Ortszeit
+$ser = [[$t37, 10982.005]];
+for ($k = 1; $k <= 40; $k++) { $ser[] = [$t37 + $k * 900, 0.0]; }
+$ser[] = [$t37 + 41 * 900, 10993.224];
+for ($k = 42; $k <= 49; $k++) { $ser[] = [$t37 + $k * 900, 0.0]; }
+$ser[] = [$t37 + 50 * 900, 10993.255];
+$ser[] = [$t37 + 51 * 900, 10993.260];
+$gaps37 = $m37('FindCounterGaps', $ser);
+check('37: zwei Lücken erkannt (40 + 8 Nullwerte), getrennt durch den echten Wert von 08:45', count($gaps37) === 2 && count($gaps37[0]['bad']) === 40 && count($gaps37[1]['bad']) === 8
+    && $gaps37[0]['after'] === [$t37 + 41 * 900, 10993.224] && $gaps37[1]['before'] === [$t37 + 41 * 900, 10993.224] && $gaps37[0]['zero'], json_encode(array_map(fn($g) => [count($g['bad']), $g['before'], $g['after']], $gaps37)));
+// Referenz: erste 20 Viertelstunden doppelt so viel Verbrauch wie danach
+$ref37 = [];
+$rv = 500.0;
+for ($k = 0; $k <= 41; $k++) { $ref37[] = [$t37 + $k * 900, $rv]; $rv += $k < 20 ? 2.0 : 1.0; }
+$fillRef = $m37('ShapeFill', $gaps37[0]['before'], $gaps37[0]['after'], $gaps37[0]['bad'], $ref37);
+$fillLin = $m37('ShapeFill', $gaps37[0]['before'], $gaps37[0]['after'], $gaps37[0]['bad'], null);
+$D = 10993.224 - 10982.005;
+$v20ref = $fillRef[19][1];
+$v20lin = $fillLin[19][1];
+check('37: nach Referenz verteilt (nach 20 Vierteln 40/61 der Menge)', abs($v20ref - (10982.005 + $D * 40 / 61)) < 1e-6, (string)$v20ref);
+check('37: ohne Referenz gleichmäßig (20/41 der Menge)', abs($v20lin - (10982.005 + $D * 20 / 41)) < 1e-6, (string)$v20lin);
+$mono = true;
+$prevV = 10982.005;
+foreach ($fillRef as [$ts, $v]) { $mono = $mono && $v >= $prevV && $v <= 10993.224; $prevV = $v; }
+check('37: aufgefüllte Reihe steigt monoton und bleibt zwischen den gültigen Ständen', $mono && count($fillRef) === 40);
+$back37 = $m37('FindCounterGaps', [[1, 100.0], [2, 100.2], [3, 100.1], [4, 100.3]]);
+check('37: einzelner Rückschritt als Lücke ohne Nullwert erkannt', count($back37) === 1 && $back37[0]['bad'] === [3] && !$back37[0]['zero'] && $back37[0]['after'] === [4, 100.3]);
+$open37 = $m37('FindCounterGaps', [[1, 100.0], [2, 0.0], [3, 0.0]]);
+check('37: Lücke bis zum Ende bleibt offen (kein gültiger Stand danach)', count($open37) === 1 && $open37[0]['after'] === null);
+check('37: InterpAt interpoliert und liefert außerhalb null', $m37('InterpAt', [[0, 0.0], [10, 10.0]], 5) === 5.0 && $m37('InterpAt', [[0, 0.0], [10, 10.0]], 11) === null);
+
 echo "\n" . ($fails === 0 ? "ALLE PRÜFUNGEN BESTANDEN\n" : "$fails PRÜFUNG(EN) FEHLGESCHLAGEN\n");
 exit($fails === 0 ? 0 : 1);

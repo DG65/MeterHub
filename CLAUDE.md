@@ -1149,6 +1149,21 @@ Setter (`SetVarEnergyWh()`/`SetVarEnergykWh()`), nicht in einem einzelnen Treibe
 in `.tools/test-powerinvert.php` (eigener, leichtgewichtiger IPSModule-Stub, kein
 Objektbaum/Treiber nötig — nur Property/Attribut/Variablenwerte).
 
+## Zählerschutz und Archiv-Reparatur (0.26.6, 12.09.2026)
+
+Inexogy füllt Übertragungslücken des Smart-Meter-Gateways mit **Zählerstand 0** (live
+10./11.09.2026, auch im Inexogy-Portal/CSV, dort ±24 MW). **Regel für alle Zählertypen:**
+ein kumulativer Zählerstand ist nie 0 und läuft nie rückwärts — `CounterGuardStep()` in
+den Energie-Settern; Zählertausch = niedrigerer Stand `COUNTER_RESET_CONFIRM` (30)
+Lesungen in Folge. Der Inexogy-Nachtrag prüft gegen Inexogys EIGENE Reihe, nicht gegen
+das Archiv (dort liegen Live-Werte, die minimal vom offiziellen 15-min-Wert abweichen →
+sonst würden gültige Punkte verworfen). Reparatur `EnergyArchiveRepair()`: Referenzzähler
+wird über die Zunahme der 24 h vor der Lücke zugeordnet, nie über den Namen (PAC2200 bei
+Dietmar hatte Bezug/Abgabe vertauscht); Leistung in Nullwert-Lücken aus Bezug −
+Einspeisung neu berechnet (kein Vorzeichenproblem). Offener Punkt: Live- und
+15-min-Werte landen im selben Archiv → winzige Rückschritte (Befund 12.09., mit Dietmar
+noch nicht entschieden).
+
 ## Modbus: eine Verbindung je Zyklus (0.26.5, 12.09.2026)
 
 `MHUB_ModbusTcpClient` öffnet die TCP-Verbindung bei der ersten Anfrage und hält sie,

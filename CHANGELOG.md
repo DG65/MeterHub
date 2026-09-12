@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.26.6-beta.1 (2026-09-12)
+
+- **🛡️ Zählerschutz für kumulative Energiezähler.** Live-Befund an Dietmars Anlage,
+  bestätigt durch Inexogys eigenes Portal und CSV-Export: Für eine Übertragungslücke
+  des Smart-Meter-Gateways (10.09. 22:45 – 11.09. 10:45) lieferte Inexogy Zählerstand
+  **0** statt „kein Wert" und berechnete daraus ±24 MW. Im Archiv entstanden
+  ±10 993 kWh je Viertelstunde, der 10.09. zeigte −10 993 kWh, der 11.09. +10 993 kWh.
+  - Live-Werte (`SetVarEnergyWh/kWh`, alle Zählertypen): ein Zählerstand wird nur
+    übernommen, wenn er > 0 ist und nicht rückwärts läuft. Ein dauerhaft niedrigerer
+    Stand (30 Lesungen in Folge) gilt als Zählertausch und wird protokolliert übernommen.
+  - Inexogy-Archivnachtrag: Datensätze mit Zählerstand 0 oder hinter Inexogys letztem
+    gültigen Stand werden verworfen, ebenso die Leistung dieser Datensätze und des ersten
+    danach. Die Lücke bleibt offen statt mit Unsinn gefüllt.
+- **🩺 Neues Panel „Energie-Archiv prüfen / reparieren"** (`MHUB_CheckEnergyArchive`,
+  `MHUB_RepairEnergyArchive`): findet Nullwerte und Rückschritte in den archivierten
+  Zählerständen, zeigt sie zuerst im Probelauf. Die Reparatur löscht die ungültigen
+  Punkte und verteilt die bekannte Menge zwischen dem letzten gültigen Stand davor und
+  dem ersten danach nach dem Verlauf eines Referenzzählers. Welcher Zähler der Referenz
+  passt, ermittelt das Modul an der Übereinstimmung der 24 h davor und nicht am Namen,
+  weil der PAC2200 an Dietmars Anlage vertauscht war. Ohne Referenz wird gleichmäßig
+  verteilt. Die Leistung in Nullwert-Lücken wird aus der aufgefüllten Energie neu
+  berechnet, danach wird neu verdichtet. Lücken ohne gültigen Stand danach und längere
+  Rückschritt-Folgen ohne Nullwerte werden nur gemeldet.
+- Prüfstand `.tools/test-virtual.php` Block 37 (Zählerschutz inkl. Zählertausch,
+  Lückenerkennung am echten Muster, Verteilung nach Referenz/gleichmäßig, Monotonie).
+
 ## 0.26.5-beta.1 (2026-09-12)
 
 - **🔧 Eine Modbus-Verbindung je Abfragezyklus statt je Anfrage.** Live-Befund im

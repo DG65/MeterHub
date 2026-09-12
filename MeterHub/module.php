@@ -2940,6 +2940,13 @@ class MeterHub extends IPSModule
         // je Energie-Ident), siehe AdvanceCalculatedEnergy(). Der Zählerstand
         // selbst steckt in der Variable, nicht hier.
         $this->RegisterAttributeString('CalcEnergyState', '{}');
+        // Zählerschutz (0.26.6): Anzahl in Folge verworfener Rückschritte je
+        // Zählervariable — ab COUNTER_RESET_CONFIRM gilt es als Zählertausch.
+        $this->RegisterAttributeString('CounterGuard', '{}');
+        // Energie-Archiv prüfen/reparieren: Referenzzähler für die Form
+        // aufzufüllender Lücken (0 = gleichmäßig) und Prüfzeitraum in Tagen.
+        $this->RegisterPropertyInteger('RepairReference', 0);
+        $this->RegisterPropertyInteger('RepairDays', 14);
         $this->RegisterPropertyInteger('IntervalFast', 5);
         $this->RegisterPropertyInteger('IntervalSlow', 60);
         // Archiv-Verdichtung, konfigurierbar statt fest im Code (Dietmars
@@ -2992,7 +2999,7 @@ class MeterHub extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.26.5';
+    private const NEWS_VERSION = '0.26.6';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -3031,6 +3038,8 @@ class MeterHub extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
+                ['type' => 'Label', 'caption' => '• 🛡️ Zählerschutz: Energie-Zählerstände werden nur noch übernommen, wenn sie größer als 0 sind und nicht rückwärts laufen — auch beim Inexogy-Archivnachtrag. Anlass: Inexogy füllte eine Übertragungslücke mit Zählerstand 0, im Archiv entstanden Scheinverbräuche von über 10 000 kWh je Viertelstunde. Ein echter Zählertausch wird erkannt (niedrigerer Stand über 30 Lesungen stabil) und protokolliert.'],
+                ['type' => 'Label', 'caption' => '• 🩺 Neues Panel „Energie-Archiv prüfen / reparieren": findet Nullwerte und Rückschritte im Archiv, zeigt sie im Probelauf und füllt Lücken auf Wunsch nach dem Verlauf eines Referenzzählers auf.'],
                 ['type' => 'Label', 'caption' => '• 🔧 Schonender für die Geräte: eine Modbus-Verbindung je Abfragezyklus statt einer je einzelner Anfrage. Viele Instanzen am selben Gerät (z. B. Dutzende Wechselrichter hinter einem blue\'Log) erzeugten vorher Tausende kurzlebige Verbindungen — manche Geräte verkraften das schlecht.'],
                 ['type' => 'Label', 'caption' => '• 🆕 Neuer Zählertyp „Meteocontrol blue\'Log SCADA – Datenlogger (Summe, Adresse 97)": Park-Leistung aller Wechselrichter, installierte/aktive Wechselrichter, optional die Leistungsregelung (verfügbare Wirk-/Blindleistung, Sollwert %). Die Gerätesuche bietet Adresse 97 bei jedem blue\'Log mit an. Rein lesend.'],
                 ['type' => 'Label', 'caption' => '• 🆕 Weil das blue\'Log unter 97 keinen Zählerstand liefert, rechnet MeterHub den „Ertrag gesamt (hochgerechnet)" selbst aus der Leistung hoch — Leistung × Zeit, archiviert wie ein echter Zähler. Lücken (Gerät nicht erreichbar, Neustart) werden nicht mit veralteten Werten überbrückt.'],
@@ -3822,6 +3831,23 @@ class MeterHub extends IPSModule
                     ),
                 ],
                 [
+                    // Energie-Archiv prüfen/reparieren (0.26.6, Anlass: Inexogy
+                    // lieferte am 10./11.09.2026 Zählerstand 0 für eine
+                    // Übertragungslücke). Zuerst immer Probelauf, geändert wird
+                    // nur über den zweiten Knopf mit Rückfrage.
+                    'type'    => 'ExpansionPanel',
+                    'caption' => '🩺  Energie-Archiv prüfen / reparieren',
+                    'expanded' => false,
+                    'items' => [
+                        ['type' => 'Label', 'caption' => 'Sucht in den archivierten Zählerständen (Bezug/Einspeisung) nach Nullwerten und Rückschritten — z. B. wenn ein Cloud-Zähler eine Übertragungslücke mit 0 füllt. Solche Punkte ergeben in Tages-/Monatswerten riesige Scheinverbräuche.'],
+                        ['type' => 'Label', 'caption' => 'Reparatur: ungültige Punkte löschen, die bekannte Menge zwischen dem letzten gültigen Stand davor und dem ersten danach verteilen — nach dem Verlauf eines Referenzzählers am selben Anschluss (welcher seiner Zähler passt, erkennt das Modul selbst an den 24 h davor), sonst gleichmäßig. Die Leistung in solchen Lücken wird aus der aufgefüllten Energie neu berechnet. Lücken ohne gültigen Stand danach (evtl. Zählertausch) bleiben unangetastet.'],
+                        ['type' => 'SelectInstance', 'name' => 'RepairReference', 'caption' => 'Referenzzähler für die Form der Lücke (leer = gleichmäßig)'],
+                        ['type' => 'NumberSpinner', 'name' => 'RepairDays', 'caption' => 'Zeitraum', 'minimum' => 1, 'maximum' => 90, 'suffix' => ' Tage'],
+                        ['type' => 'Button', 'caption' => '🔎  Prüfen (Probelauf, ändert nichts)', 'onClick' => 'echo MHUB_CheckEnergyArchive($id, $RepairReference, $RepairDays);'],
+                        ['type' => 'Button', 'caption' => '🛠️  Reparieren', 'confirm' => 'Ungültige Archivwerte löschen und die Lücken auffüllen? Vorher den Probelauf ansehen — das Löschen lässt sich nicht rückgängig machen.', 'onClick' => 'echo MHUB_RepairEnergyArchive($id, $RepairReference, $RepairDays);'],
+                    ],
+                ],
+                [
                     'type'    => 'ExpansionPanel',
                     'caption' => '📊  Datenpunkte',
                     'expanded' => true,
@@ -4327,6 +4353,11 @@ class MeterHub extends IPSModule
 
         $totals   = array_fill_keys(array_keys($vids), ['new' => 0, 'existing' => 0]);
         $emptyChunks = [];
+        // Letzter gültiger Inexogy-Zählerstand (nur Inexogys eigene Reihe,
+        // nicht das Archiv — dort liegen auch Live-Werte, die minimal vom
+        // offiziellen Viertelstundenwert abweichen).
+        $lastOfficial = ['energy' => null, 'energyOut' => null];
+        $rejected = 0;
         $chunkFrom = $fromOverall;
         while ($chunkFrom < $toOverall) {
             $chunkTo  = min($chunkFrom + $chunkDays * 86400, $toOverall);
@@ -4335,6 +4366,38 @@ class MeterHub extends IPSModule
                 $emptyChunks[] = date('Y-m-d', $chunkFrom) . '–' . date('Y-m-d', $chunkTo) . ' (' . $c->getLastError() . ')';
                 $chunkFrom = $chunkTo;
                 continue;
+            }
+            usort($readings, fn($a, $b) => ($a['time'] ?? 0) <=> ($b['time'] ?? 0));
+            // Zählerschutz (0.26.6, Live-Befund 10./11.09.2026, auch in
+            // Inexogys eigenem CSV-Export bestätigt): für eine Lücke des Smart-
+            // Meter-Gateways liefert Inexogy Zählerstand 0 statt „kein Wert"
+            // und rechnet daraus ±24 MW Leistung. Ein Datensatz gilt nur, wenn
+            // beide Zählerstände > 0 sind und nicht hinter den letzten gültigen
+            // Stand zurückfallen. Die Leistung wird für ungültige Datensätze UND
+            // den ersten gültigen danach verworfen (dort steht der Rücksprung).
+            $valid = [];
+            foreach ($readings as $i => $r) {
+                $ok = true;
+                foreach (['energy', 'energyOut'] as $ef) {
+                    $raw = $r['values'][$ef] ?? null;
+                    if ($raw === null) {
+                        continue;
+                    }
+                    $v = (float)$raw / 1e10;
+                    if ($v <= 0 || ($lastOfficial[$ef] !== null && $v < $lastOfficial[$ef])) {
+                        $ok = false;
+                    }
+                }
+                if ($ok) {
+                    foreach (['energy', 'energyOut'] as $ef) {
+                        if (($r['values'][$ef] ?? null) !== null) {
+                            $lastOfficial[$ef] = (float)$r['values'][$ef] / 1e10;
+                        }
+                    }
+                } else {
+                    $rejected++;
+                }
+                $valid[$i] = $ok;
             }
             foreach ($vids as $field => $vid) {
                 // Schon archivierte Zeitpunkte je Block auslassen statt
@@ -4348,9 +4411,12 @@ class MeterHub extends IPSModule
                     $existing[$e['TimeStamp']] = true;
                 }
                 $datasets = [];
-                foreach ($readings as $r) {
+                foreach ($readings as $i => $r) {
                     $raw = $r['values'][$field] ?? null;
                     if ($raw === null) {
+                        continue;
+                    }
+                    if (!$valid[$i] || ($field === 'power' && $i > 0 && !$valid[$i - 1])) {
                         continue;
                     }
                     $ts = (int)(($r['time'] ?? 0) / 1000);
@@ -4381,6 +4447,9 @@ class MeterHub extends IPSModule
             ? date('Y-m-d H:i', $fromOverall) . ' – ' . date('Y-m-d H:i', $toOverall) . " ({$spanH} h)"
             : date('Y-m-d', $fromOverall) . ' – ' . date('Y-m-d', $toOverall);
         $out = ["Zeitraum: $range, in {$chunkDays}-Tage-Blöcken verarbeitet"];
+        if ($rejected > 0) {
+            $out[] = '⚠️ ' . $rejected . ' Datensatz/-sätze von Inexogy verworfen (Zählerstand 0 oder rückwärts — Inexogy füllt Übertragungslücken mit 0). Die Lücke bleibt offen; „Energie-Archiv prüfen" kann sie auffüllen.';
+        }
         foreach ($fields as $field => $t) {
             if (!isset($vids[$field])) {
                 $out[] = $t['ident'] . ': Variable nicht vorhanden, übersprungen.';
@@ -4524,6 +4593,364 @@ class MeterHub extends IPSModule
      * kumulative Zählerstände (Differenzen bilden) von Periodenwerten
      * (summieren). Alle Felder additiv; alte Konsumenten ignorieren sie.
      */
+    // -----------------------------------------------------------------------
+    // Zählerschutz und Energie-Archiv prüfen/reparieren (0.26.6, Dietmars
+    // Auftrag 12.09.2026). Anlass: Inexogy lieferte für 10.09. 22:45 bis
+    // 11.09. 10:45 Zählerstand 0 (auch in Inexogys eigenem Portal/CSV), im
+    // Archiv entstanden ±10 993 kWh je Viertelstunde und ±24 MW.
+    // -----------------------------------------------------------------------
+
+    /** So viele Rückschritte in Folge, dann gilt der niedrigere Stand als Zählertausch. */
+    private const COUNTER_RESET_CONFIRM = 30;
+
+    /**
+     * Ein Schritt des Zählerschutzes, frei von Symcon-Aufrufen (Prüfstand).
+     * Rückgabe [übernehmen?, neue Anzahl Rückschritte in Folge, Grund].
+     * Ein kumulativer Zählerstand ist nie 0 und läuft nie rückwärts — außer
+     * bei einem Zählertausch: der wird angenommen, wenn der niedrigere Stand
+     * COUNTER_RESET_CONFIRM-mal in Folge kommt (ein einzelner Ausreißer nie).
+     */
+    private static function CounterGuardStep(float $current, float $new, int $rejects): array
+    {
+        if (!is_finite($new) || $new <= 0) {
+            return [false, $rejects, 'null'];
+        }
+        if ($current <= 0 || $new >= $current) {
+            return [true, 0, ''];
+        }
+        $rejects++;
+        if ($rejects >= self::COUNTER_RESET_CONFIRM) {
+            return [true, 0, 'reset'];
+        }
+        return [false, $rejects, 'rueckwaerts'];
+    }
+
+    /** Zählerschutz für einen Live-Wert; true = schreiben. */
+    private function AcceptCounter(int $vid, float $new): bool
+    {
+        $state = json_decode($this->ReadAttributeString('CounterGuard'), true);
+        $state = is_array($state) ? $state : [];
+        $before = (int)($state[$vid] ?? 0);
+        $current = (float)GetValue($vid);
+        [$ok, $rejects, $why] = self::CounterGuardStep($current, $new, $before);
+        if ($rejects !== $before) {
+            $state[$vid] = $rejects;
+            $this->WriteAttributeString('CounterGuard', (string)json_encode($state));
+        }
+        if ($why === 'reset') {
+            IPS_LogMessage('MeterHub', IPS_GetName($this->InstanceID) . ' / ' . IPS_GetName($vid) . ': Zählerstand dauerhaft niedriger (' . $current . ' → ' . $new . ') — als Zählertausch übernommen.');
+        } elseif (!$ok) {
+            $this->SendDebug('Zählerschutz', IPS_GetName($vid) . ': ' . ($why === 'null' ? 'Wert 0/ungültig' : 'rückwärts') . " verworfen ($new, Stand $current)", 0);
+        }
+        return $ok;
+    }
+
+    /** Ungültige Punkte einer Zählerreihe (aufsteigend [[ts, v], …]) zu Lücken zusammenfassen. */
+    private static function FindCounterGaps(array $pts): array
+    {
+        $spans = [];
+        $last = null;
+        $cur = null;
+        foreach ($pts as [$ts, $v]) {
+            $bad = !is_finite($v) || $v <= 0 || ($last !== null && $v < $last[1] - 1e-9);
+            if ($bad) {
+                if ($cur === null) {
+                    $cur = ['before' => $last, 'bad' => [], 'zero' => false, 'after' => null];
+                }
+                $cur['bad'][] = $ts;
+                if (!is_finite($v) || $v <= 0) {
+                    $cur['zero'] = true;
+                }
+                continue;
+            }
+            if ($cur !== null) {
+                $cur['after'] = [$ts, $v];
+                $spans[] = $cur;
+                $cur = null;
+            }
+            $last = [$ts, $v];
+        }
+        if ($cur !== null) {
+            $spans[] = $cur;
+        }
+        return $spans;
+    }
+
+    /** Linear interpolierter Wert einer aufsteigenden Reihe [[ts, v], …] bei $t, null außerhalb. */
+    private static function InterpAt(array $pts, int $t): ?float
+    {
+        $prev = null;
+        foreach ($pts as [$ts, $v]) {
+            if ($ts === $t) {
+                return (float)$v;
+            }
+            if ($ts > $t) {
+                if ($prev === null) {
+                    return null;
+                }
+                return $prev[1] + ($v - $prev[1]) * ($t - $prev[0]) / max(1, $ts - $prev[0]);
+            }
+            $prev = [$ts, (float)$v];
+        }
+        return null;
+    }
+
+    /**
+     * Werte für die Zeitpunkte einer Lücke: bekannte Gesamtmenge
+     * (after − before) verteilt nach dem Verlauf des Referenzzählers, ohne
+     * Referenz gleichmäßig. Immer monoton, nie über den Endwert hinaus.
+     */
+    private static function ShapeFill(array $before, array $after, array $tsList, ?array $refPts): array
+    {
+        [$ta, $va] = $before;
+        [$tb, $vb] = $after;
+        $d = $vb - $va;
+        $ra = $refPts ? self::InterpAt($refPts, $ta) : null;
+        $rb = $refPts ? self::InterpAt($refPts, $tb) : null;
+        $useRef = $ra !== null && $rb !== null && ($rb - $ra) > 1e-9;
+        $out = [];
+        $prev = $va;
+        foreach ($tsList as $ts) {
+            $f = ($ts - $ta) / max(1, $tb - $ta);
+            if ($useRef) {
+                $r = self::InterpAt($refPts, $ts);
+                if ($r !== null) {
+                    $f = ($r - $ra) / ($rb - $ra);
+                }
+            }
+            $f = max(0.0, min(1.0, $f));
+            $v = max($prev, $va + $d * $f);
+            $out[] = [$ts, $v];
+            $prev = $v;
+        }
+        return $out;
+    }
+
+    /** Archivierte Punkte tageweise lesen (Grenze 50 000 Zeilen je Abfrage), aufsteigend. */
+    private function LoadArchivePoints(int $ac, int $vid, int $from, int $to): array
+    {
+        $pts = [];
+        for ($t = $from; $t < $to; $t += 86400) {
+            foreach (array_reverse(AC_GetLoggedValues($ac, $vid, $t, min($to, $t + 86399), 0)) as $r) {
+                $pts[] = [(int)$r['TimeStamp'], (float)$r['Value']];
+            }
+        }
+        return $pts;
+    }
+
+    /**
+     * Welcher Zähler der Referenz passt zu dieser Reihe? Nicht über den Namen
+     * (am PAC2200 in Dietmars Anlage waren Bezug/Abgabe vertauscht), sondern
+     * über die Übereinstimmung der Zunahme in den 24 h vor der Lücke.
+     * Rückgabe [Variablen-ID, Verhältnis] oder [0, 0].
+     */
+    private function PickReference(int $ac, array $candidates, array $targetPts, int $t): array
+    {
+        $valid = array_values(array_filter($targetPts, fn($p) => $p[0] <= $t && $p[1] > 0));
+        $t0 = $t - 86400;
+        $a = self::InterpAt($valid, $t0) ?? ($valid[0][1] ?? null);
+        $tStart = self::InterpAt($valid, $t0) !== null ? $t0 : ($valid[0][0] ?? $t);
+        $b = self::InterpAt($valid, $t);
+        if ($a === null || $b === null || $b - $a < 0.01) {
+            return [0, 0.0];
+        }
+        $best = [0, 0.0];
+        $bestDist = INF;
+        foreach ($candidates as $vid) {
+            $rp = $this->LoadArchivePoints($ac, $vid, $tStart - 3600, $t + 3600);
+            $ra = self::InterpAt($rp, $tStart);
+            $rb = self::InterpAt($rp, $t);
+            if ($ra === null || $rb === null || $rb - $ra <= 0) {
+                continue;
+            }
+            $ratio = ($rb - $ra) / ($b - $a);
+            $dist = abs(log($ratio));
+            if ($ratio >= 0.5 && $ratio <= 2.0 && $dist < $bestDist) {
+                $best = [$vid, $ratio];
+                $bestDist = $dist;
+            }
+        }
+        return $best;
+    }
+
+    public function CheckEnergyArchive(int $ReferenceID, int $Days): string
+    {
+        return $this->EnergyArchiveRepair($ReferenceID, $Days, false);
+    }
+
+    public function RepairEnergyArchive(int $ReferenceID, int $Days): string
+    {
+        return $this->EnergyArchiveRepair($ReferenceID, $Days, true);
+    }
+
+    /**
+     * Energiezähler im Archiv auf Nullwerte und Rückschritte prüfen und — nur
+     * mit $apply — reparieren: ungültige Punkte löschen, die bekannte Menge
+     * zwischen dem letzten gültigen Stand davor und dem ersten danach nach dem
+     * Referenzzähler (sonst gleichmäßig) verteilen, die Leistung in
+     * Nullwert-Lücken aus der aufgefüllten Energie neu berechnen, neu
+     * verdichten. Nicht angefasst: Lücken ohne gültigen Stand danach (evtl.
+     * Zählertausch) und längere Rückschritt-Folgen ohne Nullwerte (unklar,
+     * welcher Wert der Ausreißer ist) — beide nur gemeldet.
+     */
+    private function EnergyArchiveRepair(int $refId, int $days, bool $apply): string
+    {
+        $acs = IPS_GetInstanceListByModuleID('{43192F0B-135B-4CE7-A0A7-1475603F3060}');
+        if (count($acs) === 0) {
+            return '❌ Kein Archiv-Modul (Archive Control) gefunden.';
+        }
+        $ac = $acs[0];
+        $days = max(1, min(90, $days));
+        $to = time();
+        $from = $to - $days * 86400;
+        $energy = [];
+        foreach (['energy_import' => 'Bezug', 'energy_export' => 'Einspeisung'] as $ident => $label) {
+            $vid = $this->FindVarByIdent($ident);
+            if ($vid && AC_GetLoggingStatus($ac, $vid)) {
+                $energy[$ident] = [$vid, $label];
+            }
+        }
+        if (!$energy) {
+            return 'ℹ️ Keine archivierten Energiezähler (Bezug/Einspeisung) an dieser Instanz.';
+        }
+        $refCands = [];
+        if ($refId > 0 && $refId !== $this->InstanceID && IPS_InstanceExists($refId)) {
+            foreach (['energy_import', 'energy_export'] as $ident) {
+                $rv = $this->FindIdentRecursive($refId, $ident);
+                if ($rv && AC_GetLoggingStatus($ac, $rv)) {
+                    $refCands[] = $rv;
+                }
+            }
+        }
+        $fmt = fn($t) => date('d.m. H:i', $t);
+        $lines = [$apply ? '✅ Energie-Archiv repariert (' . $days . ' Tage):' : '🔎 Probelauf, nichts geändert (' . $days . ' Tage):'];
+        $plan = [];
+        $repaired = [];
+        $zeroSpans = [];
+        foreach ($energy as $ident => [$vid, $label]) {
+            $pts = $this->LoadArchivePoints($ac, $vid, $from, $to);
+            foreach (AC_GetLoggedValues($ac, $vid, 0, $from - 1, 50) as $r) {
+                if ((float)$r['Value'] > 0) {
+                    array_unshift($pts, [(int)$r['TimeStamp'], (float)$r['Value']]);
+                    break;
+                }
+            }
+            $spans = self::FindCounterGaps($pts);
+            $del = [];
+            $add = [];
+            $nZero = 0;
+            $nBack = 0;
+            $notes = [];
+            foreach ($spans as $s) {
+                $n = count($s['bad']);
+                $range = $fmt($s['bad'][0]) . ($n > 1 ? ' – ' . $fmt(end($s['bad'])) : '') . " ($n Punkt" . ($n > 1 ? 'e' : '') . ')';
+                if ($s['zero']) {
+                    $nZero += $n;
+                } else {
+                    $nBack += $n;
+                }
+                if ($s['before'] === null || $s['after'] === null) {
+                    $notes[] = "   • $range: ohne gültigen Stand " . ($s['before'] === null ? 'davor' : 'danach') . ' — nicht repariert (evtl. Zählertausch).';
+                    continue;
+                }
+                if (!$s['zero'] && $n > 3) {
+                    $notes[] = "   • $range: längere Rückschritt-Folge ohne Nullwerte — unklar, welcher Wert der Ausreißer ist, nicht repariert.";
+                    continue;
+                }
+                $refPts = null;
+                $how = 'gleichmäßig verteilt';
+                if ($s['zero'] && $refCands) {
+                    [$rv, $ratio] = $this->PickReference($ac, $refCands, $pts, $s['before'][0]);
+                    if ($rv) {
+                        $refPts = $this->LoadArchivePoints($ac, $rv, $s['before'][0] - 3600, $s['after'][0] + 3600);
+                        $how = 'verteilt nach #' . $rv . ' ' . IPS_GetName($rv) . ' (Übereinstimmung der 24 h davor: ' . round($ratio * 100) . ' %)';
+                    } else {
+                        $how = 'gleichmäßig verteilt (Referenz passt nicht eindeutig)';
+                    }
+                }
+                foreach (self::ShapeFill($s['before'], $s['after'], $s['bad'], $refPts) as $p) {
+                    $add[] = $p;
+                }
+                foreach ($s['bad'] as $ts) {
+                    $del[] = $ts;
+                }
+                if ($s['zero']) {
+                    $notes[] = "   • $range: " . number_format($s['after'][1] - $s['before'][1], 3, ',', '.') . " kWh, $how.";
+                    if ($ident === 'energy_import') {
+                        $zeroSpans[] = [$s['before'][0], $s['after'][0], array_merge($s['bad'], [$s['after'][0]])];
+                    }
+                } elseif ($n <= 3 && count($notes) < 12) {
+                    $notes[] = "   • $range: Rückschritt, interpoliert.";
+                }
+            }
+            $lines[] = "$label (#$vid): $nZero Nullwert(e), $nBack Rückschritt(e)" . ($spans ? '' : ' — in Ordnung.');
+            $lines = array_merge($lines, $notes);
+            $plan[$ident] = [$vid, $del, $add];
+            // Reparierte Reihe für die Leistungs-Neuberechnung
+            $delSet = array_flip($del);
+            $rep = array_values(array_filter($pts, fn($p) => !isset($delSet[$p[0]])));
+            $rep = array_merge($rep, $add);
+            usort($rep, fn($a, $b) => $a[0] <=> $b[0]);
+            $repaired[$ident] = $rep;
+        }
+
+        // Leistung in Nullwert-Lücken aus der aufgefüllten Energie neu
+        // berechnen (Bezug − Einspeisung je Abschnitt) — so gibt es kein
+        // Vorzeichenproblem mit einer eventuell anders gepolten Referenz.
+        $pvid = $this->FindVarByIdent('power_total');
+        $powerPlan = [];
+        if ($pvid && $zeroSpans && AC_GetLoggingStatus($ac, $pvid)) {
+            $sign = $this->ReadPropertyBoolean('PowerInvert') ? -1.0 : 1.0;
+            $toW = $this->ReadPropertyBoolean('EnergyUnitWh') ? 1.0 : 1000.0;
+            foreach ($zeroSpans as [$ta, $tb, $tsList]) {
+                $points = [];
+                $prevT = $ta;
+                foreach ($tsList as $t) {
+                    $dI = (self::InterpAt($repaired['energy_import'], $t) ?? 0) - (self::InterpAt($repaired['energy_import'], $prevT) ?? 0);
+                    $dE = isset($repaired['energy_export'])
+                        ? (self::InterpAt($repaired['energy_export'], $t) ?? 0) - (self::InterpAt($repaired['energy_export'], $prevT) ?? 0)
+                        : 0.0;
+                    $h = max(1, $t - $prevT) / 3600.0;
+                    $points[] = [$t, $sign * ($dI - $dE) / $h * $toW];
+                    $prevT = $t;
+                }
+                $old = count(AC_GetLoggedValues($ac, $pvid, $ta + 1, $tb, 0));
+                $powerPlan[] = [$ta, $tb, $points, $old];
+            }
+            $nOld = array_sum(array_column($powerPlan, 3));
+            $nNew = array_sum(array_map(fn($p) => count($p[2]), $powerPlan));
+            $lines[] = "Leistung (#$pvid): $nOld Wert(e) in den Nullwert-Lücken, ersetzt durch $nNew aus der aufgefüllten Energie berechnete.";
+        }
+
+        if (!$apply) {
+            $total = array_sum(array_map(fn($p) => count($p[1]), $plan));
+            $lines[] = $total > 0 ? '→ „Reparieren" führt genau das aus.' : '→ Nichts zu reparieren.';
+            return implode("\n", $lines);
+        }
+        foreach ($plan as $ident => [$vid, $del, $add]) {
+            if (!$del) {
+                continue;
+            }
+            foreach ($del as $ts) {
+                AC_DeleteVariableData($ac, $vid, $ts, $ts);
+            }
+            usort($add, fn($a, $b) => $a[0] <=> $b[0]);
+            if ($add) {
+                AC_AddLoggedValues($ac, $vid, array_map(fn($p) => ['TimeStamp' => $p[0], 'Value' => $p[1]], $add));
+            }
+            AC_ReAggregateVariable($ac, $vid);
+        }
+        if ($powerPlan) {
+            foreach ($powerPlan as [$ta, $tb, $points]) {
+                AC_DeleteVariableData($ac, $pvid, $ta + 1, $tb);
+                AC_AddLoggedValues($ac, $pvid, array_map(fn($p) => ['TimeStamp' => $p[0], 'Value' => $p[1]], $points));
+            }
+            AC_ReAggregateVariable($ac, $pvid);
+        }
+        IPS_LogMessage('MeterHub', IPS_GetName($this->InstanceID) . ': Energie-Archiv repariert — ' . str_replace("\n", ' | ', implode("\n", $lines)));
+        return implode("\n", $lines);
+    }
+
     public function GetFunctions(): string
     {
         // Zähler-Eigenschaften einmal bestimmen — sie gelten für die ganze
@@ -5052,10 +5479,9 @@ class MeterHub extends IPSModule
         if (!$vid) {
             return;
         }
-        if ($this->ReadPropertyBoolean('EnergyUnitWh')) {
-            SetValueFloat($vid, $wh);
-        } else {
-            SetValueFloat($vid, $wh / 1000.0);
+        $value = $this->ReadPropertyBoolean('EnergyUnitWh') ? $wh : $wh / 1000.0;
+        if ($this->AcceptCounter($vid, $value)) {
+            SetValueFloat($vid, $value);
         }
     }
 
@@ -5070,10 +5496,9 @@ class MeterHub extends IPSModule
         if (!$vid) {
             return;
         }
-        if ($this->ReadPropertyBoolean('EnergyUnitWh')) {
-            SetValueFloat($vid, $kwh * 1000.0);
-        } else {
-            SetValueFloat($vid, $kwh);
+        $value = $this->ReadPropertyBoolean('EnergyUnitWh') ? $kwh * 1000.0 : $kwh;
+        if ($this->AcceptCounter($vid, $value)) {
+            SetValueFloat($vid, $value);
         }
     }
 
