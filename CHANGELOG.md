@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.3-beta.1 (2026-09-12)
+
+- Diagnose-Vertrag: klargestellt, dass `correlation` immer normiert ist (+1 = Richtung passt,
+  −1 = verkehrt; bei `opposite`/`pv` die umgekehrte Rohkorrelation) und alle Schwellen dafür
+  gelten (Rückfrage Dashboard). Die PV-Begründung bei „auffällig/kritisch“ nennt jetzt ebenfalls
+  die normierte „Übereinstimmung“ statt der Rohkorrelation.
+
 ## 0.27.2-beta.1 (2026-09-12)
 
 - **Richtungsprüfung: unabhängige Quellen zuerst** (Einwand Dashboard). Im Solarpark prüften

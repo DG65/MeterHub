@@ -1166,7 +1166,7 @@ Werten ab → Retry + Tag wiederherstellen (`RewriteDay`).
 Diagnose-Vertrag `MHUB_GetDiagnostics` 1.1 (1.1 = independent/referenceIDs; Quellen: IHUB-Netz, PV-Betragssumme, erst dann anderer MHUB-Netzzähler, der gemeinsam verdreht sein kann): `{contractVersion, instanceID, checkedAt,
 entries: [{type:'meter_direction', slot, label, level: normal|auffaellig|kritisch|null,
 threshold, reason, powerID, referencePowerID, referenceLabel, relation: same|opposite|pv,
-correlation, samples, checkedAt}]}`. InverterHub-Netz ist „+ = Einspeisung" (SUITE.md).
+correlation (NORMIERT: +1 = passt, bei opposite/pv = umgekehrte Rohkorrelation; alle Schwellen gelten dafür), samples, checkedAt}]}`. InverterHub-Netz ist „+ = Einspeisung" (SUITE.md).
 
 ## Zählerschutz und Archiv-Reparatur (0.26.6, 12.09.2026)
 

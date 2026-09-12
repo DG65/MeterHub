@@ -5790,6 +5790,9 @@ class MeterHub extends IPSModule
      * „+ = Einspeisung", also gegenläufig), hilfsweise die PV-Erzeugung
      * (Netzleistung muss fallen, wenn PV steigt — nur Hinweis). Ergebnis
      * 30 min zwischengespeichert; ein neuer Befund landet einmal im Log.
+     * `correlation` ist immer NORMIERT: +1 = Richtung passt, −1 = verkehrt —
+     * bei 'opposite' und 'pv' also die umgekehrte Rohkorrelation (Netz ↔ PV
+     * roh −0,998 = correlation +0,998). Alle Schwellen gelten für diesen Wert.
      */
     public function GetDiagnostics(): array
     {
@@ -5875,7 +5878,7 @@ class MeterHub extends IPSModule
                 if ($relation === 'pv') {
                     $reason = $level === 'normal' ? 'Die Netzleistung sinkt, wenn die PV-Erzeugung (' . $rlabel . ') steigt — Richtung plausibel.'
                         : ($level === null ? 'Keine eindeutige Aussage aus dem Vergleich mit der PV-Erzeugung (' . $rlabel . ').'
-                        : 'Die Netzleistung steigt mit der PV-Erzeugung (' . $rlabel . ', Korrelation ' . (-$pct) . ' %) — ' . ($level === 'kritisch'
+                        : 'Die Netzleistung steigt mit der PV-Erzeugung (' . $rlabel . ', Übereinstimmung ' . $pct . ' %) — ' . ($level === 'kritisch'
                             ? 'der Zähler scheint verkehrt herum zu messen. Schalter „Bezug/Einspeisung vertauscht" prüfen.'
                             : 'das deutet auf eine verkehrte Richtung hin. Schalter „Bezug/Einspeisung vertauscht" prüfen. Nur ein Hinweis: auch Verbraucher, die sich nach der PV richten, können so wirken.'));
                 } else {
