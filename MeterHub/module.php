@@ -5883,9 +5883,10 @@ class MeterHub extends IPSModule
                 [$level, $th] = self::DirectionLevel($rel, $relation);
                 $pct = (int)round($rel * 100);
                 if ($relation === 'pv') {
-                    $reason = $level === 'normal' ? 'Die Netzleistung sinkt, wenn die PV-Erzeugung (' . $rlabel . ') steigt — Richtung plausibel.'
-                        : ($level === null ? 'Keine eindeutige Aussage aus dem Vergleich mit der PV-Erzeugung (' . $rlabel . ').'
-                        : 'Die Netzleistung steigt mit der PV-Erzeugung (' . $rlabel . ', Übereinstimmung ' . $pct . ' %) — ' . ($level === 'kritisch'
+                    // $rlabel beginnt schon mit „PV-Erzeugung" (live 12.09.2026: „PV-Erzeugung (PV-Erzeugung (20 Zähler))").
+                    $reason = $level === 'normal' ? 'Die Netzleistung sinkt, wenn die ' . $rlabel . ' steigt — Richtung passt (Übereinstimmung ' . $pct . ' % über ' . $n . ' Fünf-Minuten-Werte der letzten 48 h).'
+                        : ($level === null ? 'Keine eindeutige Aussage aus dem Vergleich mit der ' . $rlabel . ' (Übereinstimmung ' . $pct . ' %).'
+                        : 'Die Netzleistung steigt mit der ' . $rlabel . ' (Übereinstimmung ' . $pct . ' %) — ' . ($level === 'kritisch'
                             ? 'der Zähler scheint verkehrt herum zu messen. Schalter „Bezug/Einspeisung vertauscht" prüfen.'
                             : 'das deutet auf eine verkehrte Richtung hin. Schalter „Bezug/Einspeisung vertauscht" prüfen. Nur ein Hinweis: auch Verbraucher, die sich nach der PV richten, können so wirken.'));
                 } else {

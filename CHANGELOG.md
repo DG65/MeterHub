@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.27.5-beta.1 (2026-09-12)
+
+- Richtungsprüfung, PV-Vergleich: Die Begründung nennt die Quelle nicht mehr doppelt
+  („PV-Erzeugung (PV-Erzeugung (20 Zähler))“) und zeigt wie die anderen Texte Übereinstimmung
+  und Anzahl der Werte. Live bestätigt mit 0.27.4: PAC2200 „passt“ gegen die GoodWe-Netzmessung,
+  Inexogy als Cloud-Zähler ausgenommen, beide Solarpark-NAPs „passt“ gegen die PV-Summe aus
+  20 Zählern (unabhängig, Übereinstimmung 100 %).
+
 ## 0.27.4-beta.1 (2026-09-12)
 
 - Richtungsprüfung sofort aktuell: „Übernehmen“ und das Neuladen des Moduls verwerfen den
