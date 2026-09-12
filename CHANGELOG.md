@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.27.1-beta.1 (2026-09-12)
+
+Erster Live-Probelauf von „Richtung im Archiv prüfen" an Dietmars Anlage und im Solarpark:
+
+- Solarpark (beide Netzanschlüsse) sauber: Energie durchgehend, die Leistung passt in rund 5 750
+  Viertelstunden. Richtungsprüfung gegenseitig „passt“ (100 %).
+- Haus-PAC2200: Der Probelauf fand den Abschnitt 26.07. 14:45 – 27.07. 14:15, in dem die Leistung
+  gegenläufig zur Energie steht. Das Dashboard hatte ihn gegen die GoodWe-Netzmessung gedreht,
+  die dort selbst verkehrt herum war. Zwei unabhängige Zählerstände (PAC, Inexogy) bestätigen den
+  Befund. Der Abschnitt zerfiel aber in zwei, weil in der Nacht zu wenig Leistung floss. Jetzt
+  werden unklare Strecken bis 12 h zwischen zwei gegenläufigen Abschnitten überbrückt (bisher
+  2 h). Eine passende Viertelstunde dazwischen trennt weiterhin immer.
+- Cloud-Zähler (Inexogy): kein Leistungsabgleich mehr (vorher 14 Fehlalarme aus je 2–5 Werten,
+  Zeitversatz zwischen Leistung und Zählerstand) und keine Richtungsprüfung.
+
 ## 0.27.0-beta.1 (2026-09-12)
 
 Anlass: An Dietmars PAC2200 und an beiden Solarpark-Netzanschlüssen stand „Bezug/Einspeisung

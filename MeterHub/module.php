@@ -3028,7 +3028,7 @@ class MeterHub extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.27.0';
+    private const NEWS_VERSION = '0.27.1';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -3067,6 +3067,7 @@ class MeterHub extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
+                ['type' => 'Label', 'caption' => '• 🔧 Richtung im Archiv: Nächte mit zu wenig Leistung für eine Aussage (bis 12 h) werden zwischen zwei gegenläufigen Abschnitten mitgedreht, statt stehen zu bleiben. Bei Cloud-Zählern (Inexogy) entfallen Leistungsabgleich und Richtungsprüfung — Leistung und Zählerstände kommen dort zeitversetzt an und ergaben Fehlalarme.'],
                 ['type' => 'Label', 'caption' => '• ↔️ „Bezug/Einspeisung vertauscht" umschalten ohne Sprung: Die beiden Energiezähler-Variablen tauschen dabei ihre Rolle, jede zählt mit ihrem Verlauf weiter. Vorher sprangen Bezug und Einspeisung aufeinander — Tages- und Monatswerte zeigten riesige Scheinverbräuche.'],
                 ['type' => 'Label', 'caption' => '• 🧭 Richtungsprüfung beim Schalter (Netzanschluss): Vergleich mit einem zweiten Netzzähler oder der Netzmessung des Wechselrichters, hilfsweise mit der PV-Erzeugung. Misst der Zähler offenbar verkehrt herum, steht das dort und einmal im Meldungsprotokoll; das Dashboard kann es über MHUB_GetDiagnostics anzeigen.'],
                 ['type' => 'Label', 'caption' => '• 🛠️ Neues Panel „Richtung im Archiv prüfen / korrigieren" für frühere Umschaltungen: macht vertauschte Energie-Abschnitte wieder durchgehend und dreht gegenläufig gespeicherte Leistung — mit Probelauf und Sicherung vorab.'],
@@ -5287,6 +5288,10 @@ class MeterHub extends IPSModule
         $evid = $this->FindVarByIdent('energy_export');
         if (!$pvid || !$ivid || !$evid || !AC_GetLoggingStatus($ac, $pvid) || !AC_GetLoggingStatus($ac, $ivid) || !AC_GetLoggingStatus($ac, $evid)) {
             $lines[] = 'Leistung: kein Abgleich möglich (braucht die archivierte Gesamtleistung und beide Energiezähler).';
+        } elseif (in_array($this->ReadPropertyString('Meter'), self::CLOUD_METERS, true)) {
+            // Live an Dietmars Inexogy (12.09.2026): 14 „Abschnitte" aus je
+            // 2–5 Werten, alles Zeitversatz zwischen Leistung und Zählerstand.
+            $lines[] = 'Leistung (#' . $pvid . '): kein Abgleich — bei Cloud-Zählern kommen Leistung und Zählerstände zeitversetzt an, eine Richtung je Viertelstunde ist daraus nicht verlässlich.';
         } elseif ($energyMoved > 0) {
             $lines[] = 'Leistung (#' . $pvid . '): wird abgeglichen, sobald die Energie stimmt — ' . ($apply ? 'bitte jetzt noch einmal „Prüfen" drücken.' : 'erst „Korrigieren", dann erneut „Prüfen".');
         } else {
@@ -5482,7 +5487,10 @@ class MeterHub extends IPSModule
             unset($pp, $pi, $pe, $pm, $hi, $he);
         }
         $windows = [];
-        foreach (self::FindMismatchWindows($verdicts, 900, 7200, 2) as [$wa, $wb]) {
+        // Bis 12 h überbrücken: Nachts fließt oft zu wenig Leistung für eine
+        // Aussage. Live an Dietmars PAC2200 (26./27.07.2026) zerfiel ein
+        // falsch gedrehter Abschnitt sonst in zwei, die Nacht blieb stehen.
+        foreach (self::FindMismatchWindows($verdicts, 900, 43200, 2) as [$wa, $wb]) {
             $open = $wb >= $to;
             $sa = $this->RefineEdge($ac, $pvid, $nets, $wa, true);
             $sb = $open ? $wb : $this->RefineEdge($ac, $pvid, $nets, $wb, false);
@@ -5827,6 +5835,11 @@ class MeterHub extends IPSModule
                 'powerID' => $pid, 'referencePowerID' => 0, 'referenceLabel' => '', 'relation' => '',
                 'correlation' => null, 'samples' => 0, 'checkedAt' => $now,
             ];
+            if (in_array($this->ReadPropertyString('Meter'), self::CLOUD_METERS, true)) {
+                $entry['reason'] = 'Cloud-Zähler: Leistung kommt zeitversetzt an — keine Richtungsprüfung.';
+                $out['entries'][] = $entry;
+                continue;
+            }
             if (!AC_GetLoggingStatus($ac, $pid)) {
                 $entry['reason'] = 'Die Leistung wird nicht archiviert — keine Richtungsprüfung möglich.';
                 $out['entries'][] = $entry;

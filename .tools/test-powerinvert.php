@@ -223,10 +223,15 @@ check('8: Viertelstunde passt / gegenläufig / zu wenig Leistung',
     $m8('BucketVerdict', 500.0, 400.0, 100.0) === 1 && $m8('BucketVerdict', 500.0, -400.0, 100.0) === -1 && $m8('BucketVerdict', 50.0, 400.0, 100.0) === 0);
 $v8 = [];
 foreach ([1, 1, 0, -1, -1, 0, 0, -1, -1, 1, 1, -1, 1] as $k => $x) { $v8[] = [$k * 900, $x]; }
-check('8: gegenläufige Viertelstunden zu Abschnitten, kurze Lücken überbrückt, Einzelne verworfen', $m8('FindMismatchWindows', $v8, 900, 7200, 2) === [[2700, 8100]], json_encode($m8('FindMismatchWindows', $v8, 900, 7200, 2)));
+check('8: gegenläufige Viertelstunden zu Abschnitten, kurze Lücken überbrückt, Einzelne verworfen', $m8('FindMismatchWindows', $v8, 900, 43200, 2) === [[2700, 8100]], json_encode($m8('FindMismatchWindows', $v8, 900, 43200, 2)));
+$v8n = [];
+foreach (array_merge([-1, -1], array_fill(0, 27, 0), [-1, -1]) as $k => $x) { $v8n[] = [$k * 900, $x]; }
+check('8: Nacht mit zu wenig Leistung (PAC2200 27.07. 01:14–08:04) wird überbrückt', $m8('FindMismatchWindows', $v8n, 900, 43200, 2) === [[0, 31 * 900]], json_encode($m8('FindMismatchWindows', $v8n, 900, 43200, 2)));
 $v8b = [];
-foreach (array_merge([-1, -1], array_fill(0, 10, 0), [-1, -1]) as $k => $x) { $v8b[] = [$k * 900, $x]; }
-check('8: lange unklare Lücke (Nacht) trennt zwei Abschnitte', count($m8('FindMismatchWindows', $v8b, 900, 7200, 2)) === 2);
+foreach (array_merge([-1, -1], array_fill(0, 50, 0), [-1, -1]) as $k => $x) { $v8b[] = [$k * 900, $x]; }
+check('8: unklare Strecke über 12 h trennt zwei Abschnitte', count($m8('FindMismatchWindows', $v8b, 900, 43200, 2)) === 2);
+$v8p = [[0, -1], [900, -1], [1800, 0], [2700, 1], [3600, 0], [4500, -1], [5400, -1]];
+check('8: eine passende Viertelstunde dazwischen trennt immer', count($m8('FindMismatchWindows', $v8p, 900, 43200, 2)) === 2);
 $pts8 = [[10, false], [20, false], [30, false], [40, true], [50, true], [60, false], [70, true], [80, true]];
 check('8: Umschaltpunkt am Anfang eines Abschnitts', $m8('ChangePoint', $pts8, true) === 40, (string)$m8('ChangePoint', $pts8, true));
 check('8: Umschaltpunkt am Ende eines Abschnitts', $m8('ChangePoint', [[10, true], [20, true], [30, false], [40, false]], false) === 30);
