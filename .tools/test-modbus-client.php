@@ -67,6 +67,11 @@ while ($c = @stream_socket_accept($srv, 30)) {
         } else {
             $resp = substr($pdu, 0, 5);
         }
+        if ($mode === 'stray') {
+            // Verspätete Antwort einer "früheren" Anfrage: fremde TID, Müllwert.
+            $bad = chr($fc) . chr(2) . pack('n', 0xDEAD);
+            fwrite($c, pack('nnn', ($h['tid'] + 1000) & 0xFFFF, 0, strlen($bad) + 1) . chr($h['unit']) . $bad);
+        }
         fwrite($c, pack('nnn', $h['tid'], 0, strlen($resp) + 1) . chr($h['unit']) . $resp);
         $served++;
         if ($mode === 'dropafter1') { break; }
@@ -143,6 +148,16 @@ $dt = microtime(true) - $t0;
 check('liefert null', $res === null);
 check('nur einmal gewartet (≈3 s, nicht 6 s)', $dt < 4.5, round($dt, 2) . ' s');
 check('Grund: timeout', $mb->lastError === 'timeout', $mb->lastError);
+$mb->close();
+stopServer($s);
+
+echo "5b) Fremde Antwort mit falscher Transaktions-ID (Befund InverterHub 12.09.2026: 261,5 MW nachts aus vertauschten Registerhälften)\n";
+$s = startServer('stray');
+$mb = new MHUB_ModbusTcpClient('127.0.0.1', $s[1], 1);
+$st1 = $mb->readHolding(41000, 1);
+$st2 = $mb->readHolding(41001, 1);
+check('fremder Frame verworfen, jede Abfrage bekommt ihren eigenen Wert', ($st1[0] ?? null) === 41000 && ($st2[0] ?? null) === 41001, json_encode([$st1, $st2]));
+check('kein 0xDEAD durchgerutscht, dieselbe Verbindung', !in_array(0xDEAD, array_merge((array)$st1, (array)$st2), true) && serverConns($s) === 1);
 $mb->close();
 stopServer($s);
 
