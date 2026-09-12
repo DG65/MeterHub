@@ -3842,7 +3842,7 @@ class MeterHub extends IPSModule
                         ['type' => 'Label', 'caption' => 'Sucht in den archivierten Zählerständen (Bezug/Einspeisung) nach Nullwerten und Rückschritten — z. B. wenn ein Cloud-Zähler eine Übertragungslücke mit 0 füllt. Solche Punkte ergeben in Tages-/Monatswerten riesige Scheinverbräuche.'],
                         ['type' => 'Label', 'caption' => 'Reparatur: ungültige Punkte löschen, die bekannte Menge zwischen dem letzten gültigen Stand davor und dem ersten danach verteilen — nach dem Verlauf eines Referenzzählers am selben Anschluss (welcher seiner Zähler passt, erkennt das Modul selbst an den 24 h davor), sonst gleichmäßig. Die Leistung in solchen Lücken wird aus der aufgefüllten Energie neu berechnet. Lücken ohne gültigen Stand danach (evtl. Zählertausch) bleiben unangetastet.'],
                         ['type' => 'SelectInstance', 'name' => 'RepairReference', 'caption' => 'Referenzzähler für die Form der Lücke (leer = gleichmäßig)'],
-                        ['type' => 'NumberSpinner', 'name' => 'RepairDays', 'caption' => 'Zeitraum', 'minimum' => 1, 'maximum' => 90, 'suffix' => ' Tage'],
+                        ['type' => 'NumberSpinner', 'name' => 'RepairDays', 'caption' => 'Zeitraum (höchstens 45 Tage)', 'minimum' => 1, 'maximum' => 45, 'suffix' => ' Tage'],
                         ['type' => 'Button', 'caption' => '🔎  Prüfen (Probelauf, ändert nichts)', 'onClick' => 'echo MHUB_CheckEnergyArchive($id, $RepairReference, $RepairDays);'],
                         ['type' => 'Button', 'caption' => '🛠️  Reparieren', 'confirm' => 'Ungültige Archivwerte löschen und die Lücken auffüllen? Vorher den Probelauf ansehen — das Löschen lässt sich nicht rückgängig machen.', 'onClick' => 'echo MHUB_RepairEnergyArchive($id, $RepairReference, $RepairDays);'],
                     ],
@@ -4800,7 +4800,9 @@ class MeterHub extends IPSModule
             return '❌ Kein Archiv-Modul (Archive Control) gefunden.';
         }
         $ac = $acs[0];
-        $days = max(1, min(90, $days));
+        // Höchstens 45 Tage: bei Minutenwerten ~65 000 Punkte je Reihe, sicher
+        // unter dem 32-MB-Limit der Skript-Engine.
+        $days = max(1, min(45, $days));
         $to = time();
         $from = $to - $days * 86400;
         $energy = [];
@@ -4886,12 +4888,39 @@ class MeterHub extends IPSModule
             $lines[] = "$label (#$vid): $nZero Nullwert(e), $nBack Rückschritt(e)" . ($spans ? '' : ' — in Ordnung.');
             $lines = array_merge($lines, $notes);
             $plan[$ident] = [$vid, $del, $add];
-            // Reparierte Reihe für die Leistungs-Neuberechnung
+            // Reparierte Reihe nur rund um Nullwert-Lücken behalten (dafür
+            // braucht sie die Leistungs-Neuberechnung). Die ganze Reihe
+            // mehrfach im Speicher würde bei Minutenwerten über Wochen das
+            // feste 32-MB-Limit der Skript-Engine sprengen.
+            $windows = [];
+            foreach ($spans as $s) {
+                if ($s['zero'] && $s['before'] !== null && $s['after'] !== null) {
+                    $windows[] = [$s['before'][0], $s['after'][0]];
+                }
+            }
+            $inWin = function (int $ts) use ($windows): bool {
+                foreach ($windows as [$wa, $wb]) {
+                    if ($ts >= $wa && $ts <= $wb) {
+                        return true;
+                    }
+                }
+                return false;
+            };
             $delSet = array_flip($del);
-            $rep = array_values(array_filter($pts, fn($p) => !isset($delSet[$p[0]])));
-            $rep = array_merge($rep, $add);
+            $rep = [];
+            foreach ($pts as $p) {
+                if (!isset($delSet[$p[0]]) && $inWin($p[0])) {
+                    $rep[] = $p;
+                }
+            }
+            foreach ($add as $p) {
+                if ($inWin($p[0])) {
+                    $rep[] = $p;
+                }
+            }
             usort($rep, fn($a, $b) => $a[0] <=> $b[0]);
             $repaired[$ident] = $rep;
+            unset($pts, $spans, $delSet);
         }
 
         // Leistung in Nullwert-Lücken aus der aufgefüllten Energie neu

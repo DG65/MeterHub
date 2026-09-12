@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.26.7-beta.1 (2026-09-12)
+
+- **Energie-Archiv prüfen/reparieren speicherfest für jeden Nutzer.** Die Prüfung hielt
+  die Zählerreihe des ganzen Zeitraums mehrfach im Speicher. Bei Zählern mit
+  Minutenwerten und langem Zeitraum hätte das Symcons festes 32-MB-Limit für Skripte
+  sprengen können. Jetzt bleibt nur der Bereich rund um die Nullwert-Lücken im Speicher,
+  die Rohreihe wird nach jeder Variable freigegeben, und der Zeitraum ist auf höchstens
+  45 Tage begrenzt.
+
 ## 0.26.6-beta.1 (2026-09-12)
 
 - **🛡️ Zählerschutz für kumulative Energiezähler.** Live-Befund an Dietmars Anlage,
