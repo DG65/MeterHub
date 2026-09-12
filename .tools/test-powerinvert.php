@@ -243,8 +243,12 @@ check('8: Zählerstand an den Viertelstunden-Grenzen', $m8('SampleHold', [[100, 
 check('8: gegenläufige Netzzähler → Gleichlauf ≈ −1, kleine Werte zählen nicht', $c8 < -0.99 && $n8 === 2, json_encode([$c8, $n8]));
 [$p8, $pn8] = $m8('PearsonPairs', [0 => 2000.0, 1 => 500.0, 2 => -1500.0, 3 => 1800.0], [0 => 400.0, 1 => 2000.0, 2 => 4000.0, 3 => 100.0], 300.0);
 check('8: Netz fällt, wenn PV steigt → negative Korrelation, nur Zeiten mit PV', $p8 < -0.9 && $pn8 === 3, json_encode([$p8, $pn8]));
-check('8: Bewertung direkt / nur PV', $m8('DirectionLevel', 0.97, true) === ['normal', 0.6] && $m8('DirectionLevel', -0.9, true) === ['kritisch', 0.6]
-    && $m8('DirectionLevel', -0.5, false) === ['auffaellig', 0.3] && $m8('DirectionLevel', 0.1, true) === [null, 0.6]);
+check('8: Bewertung Netzquelle', $m8('DirectionLevel', 0.97, 'opposite') === ['normal', 0.6] && $m8('DirectionLevel', -0.9, 'same') === ['kritisch', 0.6]
+    && $m8('DirectionLevel', 0.1, 'same') === [null, 0.6]);
+check('8: Bewertung PV — schwach gegenläufig nur auffällig, stark gegenläufig kritisch', $m8('DirectionLevel', -0.5, 'pv') === ['auffaellig', 0.3]
+    && $m8('DirectionLevel', -0.9, 'pv') === ['kritisch', 0.3] && $m8('DirectionLevel', 0.5, 'pv') === ['normal', 0.3] && $m8('DirectionLevel', 0.1, 'pv') === [null, 0.3]);
+[$pa8, $pan8] = $m8('PearsonPairs', [0 => -9000.0, 1 => -4000.0, 2 => -500.0], [0 => 9100.0, 1 => 4050.0, 2 => 600.0], 300.0);
+check('8: Solarpark richtig herum: Netz = −PV → Korrelation −1, also „passt"', $pa8 < -0.99 && $m8('DirectionLevel', -$pa8, 'pv')[0] === 'normal');
 check('8: Gegen-Idents', $m8('CounterpartIdent', 'energy_import_t2') === 'energy_export_t2' && $m8('CounterpartIdent', 'fn_wallbox1_export') === 'fn_wallbox1_import' && $m8('CounterpartIdent', 'power_total') === null);
 
 echo "\n" . ($fails === 0 ? "ALLE PRÜFUNGEN BESTANDEN\n" : "$fails PRÜFUNG(EN) FEHLGESCHLAGEN\n");

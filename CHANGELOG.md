@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.27.2-beta.1 (2026-09-12)
+
+- **Richtungsprüfung: unabhängige Quellen zuerst** (Einwand Dashboard). Im Solarpark prüften
+  sich die beiden NAPs nur gegenseitig. Gerade die heutige Lage, beide gleichzeitig mit
+  falschem PowerInvert, hätte trotzdem „passt“ ergeben. Die neue Reihenfolge:
+  1. InverterHub-Netzmessung
+  2. PV-Erzeugung als Summe der Beträge aller PV-Zuordnungen von InverterHub, MeterHub und
+     MeterHubVirtual. Durch den Betrag ist egal, wie herum ein PV-Zähler eingestellt ist.
+     Stark gegenläufig (≤ −0,8) gilt als kritisch, schwächer nur als auffällig.
+  3. andere MeterHub-Netzzähler nur als Notlösung, mit Hinweis im Begründungstext
+- Diagnose-Vertrag **1.1**: `independent` und `referenceIDs` je Eintrag. Die Bezeichnung trägt den
+  Instanznamen („Richtung NAP Albersboesch“) statt des Funktionsnamens.
+
 ## 0.27.1-beta.1 (2026-09-12)
 
 Erster Live-Probelauf von „Richtung im Archiv prüfen" an Dietmars Anlage und im Solarpark:

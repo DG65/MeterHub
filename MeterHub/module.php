@@ -3028,7 +3028,7 @@ class MeterHub extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.27.1';
+    private const NEWS_VERSION = '0.27.2';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -3067,6 +3067,7 @@ class MeterHub extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
+                ['type' => 'Label', 'caption' => '• 🧭 Richtungsprüfung vergleicht zuerst mit unabhängigen Quellen: Netzmessung des Wechselrichters, dann die PV-Erzeugung (Summe aller PV-Zähler im Verbund, egal wie herum eingestellt). Ein anderer Netzzähler dieses Moduls dient nur noch als Notlösung, mit dem Hinweis, dass eine gemeinsame Verdrehung so nicht auffällt. Die Zeilen tragen jetzt den Instanznamen.'],
                 ['type' => 'Label', 'caption' => '• 🔧 Richtung im Archiv: Nächte mit zu wenig Leistung für eine Aussage (bis 12 h) werden zwischen zwei gegenläufigen Abschnitten mitgedreht, statt stehen zu bleiben. Bei Cloud-Zählern (Inexogy) entfallen Leistungsabgleich und Richtungsprüfung — Leistung und Zählerstände kommen dort zeitversetzt an und ergaben Fehlalarme.'],
                 ['type' => 'Label', 'caption' => '• ↔️ „Bezug/Einspeisung vertauscht" umschalten ohne Sprung: Die beiden Energiezähler-Variablen tauschen dabei ihre Rolle, jede zählt mit ihrem Verlauf weiter. Vorher sprangen Bezug und Einspeisung aufeinander — Tages- und Monatswerte zeigten riesige Scheinverbräuche.'],
                 ['type' => 'Label', 'caption' => '• 🧭 Richtungsprüfung beim Schalter (Netzanschluss): Vergleich mit einem zweiten Netzzähler oder der Netzmessung des Wechselrichters, hilfsweise mit der PV-Erzeugung. Misst der Zähler offenbar verkehrt herum, steht das dort und einmal im Meldungsprotokoll; das Dashboard kann es über MHUB_GetDiagnostics anzeigen.'],
@@ -5813,7 +5814,8 @@ class MeterHub extends IPSModule
     private function ComputeDiagnostics(): array
     {
         $now = time();
-        $out = ['contractVersion' => '1.0', 'instanceID' => $this->InstanceID, 'checkedAt' => $now, 'entries' => []];
+        // 1.1 = independent/referenceIDs je Eintrag, PV als Summe mehrerer Zähler.
+        $out = ['contractVersion' => '1.1', 'instanceID' => $this->InstanceID, 'checkedAt' => $now, 'entries' => []];
         $acs = IPS_GetInstanceListByModuleID('{43192F0B-135B-4CE7-A0A7-1475603F3060}');
         if (count($acs) === 0) {
             return $out;
@@ -5830,8 +5832,11 @@ class MeterHub extends IPSModule
                 continue;
             }
             $entry = [
-                'type' => 'meter_direction', 'slot' => $a['slot'], 'label' => 'Richtung ' . $a['label'],
-                'level' => null, 'threshold' => null, 'reason' => '',
+                // Instanzname statt Funktionsname — sonst stehen im Dashboard
+                // mehrere gleiche Zeilen „Richtung Netzanschluss" (Einwand 12.09.2026).
+                'type' => 'meter_direction', 'slot' => $a['slot'],
+                'label' => 'Richtung ' . IPS_GetName($this->InstanceID) . ($a['slot'] === 'total' ? '' : ' ' . $a['slot']),
+                'level' => null, 'threshold' => null, 'reason' => '', 'independent' => null, 'referenceIDs' => [],
                 'powerID' => $pid, 'referencePowerID' => 0, 'referenceLabel' => '', 'relation' => '',
                 'correlation' => null, 'samples' => 0, 'checkedAt' => $now,
             ];
@@ -5847,29 +5852,42 @@ class MeterHub extends IPSModule
             }
             $own = self::SegmentMeans($this->LoadArchivePoints($ac, $pid, $from, $now), $this->LastValueBefore($ac, $pid, $from), $from, $now, 300);
             $refs ??= $this->DirectionReferences();
-            foreach ($refs as [$rid, $rlabel, $relation]) {
-                if ($rid === $pid || !IPS_VariableExists($rid) || !AC_GetLoggingStatus($ac, $rid)) {
+            foreach ($refs as $r) {
+                [$rlabel, $relation] = [$r['label'], $r['relation']];
+                $ids = array_values(array_filter($r['ids'], fn($x) => $x !== $pid && IPS_VariableExists($x) && AC_GetLoggingStatus($ac, $x)));
+                if (!$ids) {
                     continue;
                 }
-                $ref = self::SegmentMeans($this->LoadArchivePoints($ac, $rid, $from, $now), $this->LastValueBefore($ac, $rid, $from), $from, $now, 300);
+                $rid = $ids[0];
+                $ref = [];
+                foreach ($ids as $x) {
+                    foreach (self::SegmentMeans($this->LoadArchivePoints($ac, $x, $from, $now), $this->LastValueBefore($ac, $x, $from), $from, $now, 300) as $k => $w) {
+                        $ref[$k] = ($ref[$k] ?? 0.0) + ($relation === 'pv' ? abs($w) : $w);
+                    }
+                }
                 [$c, $n] = $relation === 'pv' ? self::PearsonPairs($own, $ref, 300.0) : self::CosinePairs($own, $ref, self::DIR_MIN_W);
                 if ($n < 24) {
                     continue; // weniger als 2 h gemeinsame Messwerte — nächste Quelle
                 }
                 $rel = $relation === 'same' ? $c : -$c;
-                [$level, $th] = self::DirectionLevel($rel, $relation !== 'pv');
+                [$level, $th] = self::DirectionLevel($rel, $relation);
                 $pct = (int)round($rel * 100);
                 if ($relation === 'pv') {
                     $reason = $level === 'normal' ? 'Die Netzleistung sinkt, wenn die PV-Erzeugung (' . $rlabel . ') steigt — Richtung plausibel.'
                         : ($level === null ? 'Keine eindeutige Aussage aus dem Vergleich mit der PV-Erzeugung (' . $rlabel . ').'
-                        : 'Die Netzleistung steigt mit der PV-Erzeugung (' . $rlabel . ') — das deutet auf eine verkehrte Richtung hin. Schalter „Bezug/Einspeisung vertauscht" prüfen. Nur ein Hinweis: auch Verbraucher, die sich nach der PV richten, können so wirken.');
+                        : 'Die Netzleistung steigt mit der PV-Erzeugung (' . $rlabel . ', Korrelation ' . (-$pct) . ' %) — ' . ($level === 'kritisch'
+                            ? 'der Zähler scheint verkehrt herum zu messen. Schalter „Bezug/Einspeisung vertauscht" prüfen.'
+                            : 'das deutet auf eine verkehrte Richtung hin. Schalter „Bezug/Einspeisung vertauscht" prüfen. Nur ein Hinweis: auch Verbraucher, die sich nach der PV richten, können so wirken.'));
                 } else {
                     $reason = $level === 'normal' ? 'Richtung passt zu ' . $rlabel . ' (Übereinstimmung ' . $pct . ' % über ' . $n . ' Fünf-Minuten-Werte der letzten 48 h).'
                         : ($level === null ? 'Keine eindeutige Aussage im Vergleich mit ' . $rlabel . ' (Übereinstimmung ' . $pct . ' %).'
                         : 'Die Leistung läuft gegenläufig zu ' . $rlabel . ' (Übereinstimmung ' . $pct . ' %) — der Zähler scheint verkehrt herum zu messen. Schalter „Bezug/Einspeisung vertauscht" prüfen; möglich ist auch, dass die Vergleichsquelle verkehrt ist.');
                 }
+                if (!$r['independent']) {
+                    $reason .= ' Hinweis: Vergleich mit einem Zähler desselben Moduls — stehen beide gleich verkehrt herum, ist das so nicht erkennbar.';
+                }
                 $entry = array_merge($entry, [
-                    'level' => $level, 'threshold' => $th, 'reason' => $reason,
+                    'level' => $level, 'threshold' => $th, 'reason' => $reason, 'independent' => $r['independent'], 'referenceIDs' => $ids,
                     'referencePowerID' => $rid, 'referenceLabel' => $rlabel, 'relation' => $relation,
                     'correlation' => round($rel, 2), 'samples' => $n,
                 ]);
@@ -5886,23 +5904,42 @@ class MeterHub extends IPSModule
     /** Vergleichsquellen [[Leistungs-ID, Bezeichnung, 'same'|'opposite'|'pv'], …] in der Reihenfolge ihrer Aussagekraft. */
     private function DirectionReferences(): array
     {
-        $refs = [];
-        if (function_exists('MHUB_GetFunctions')) {
-            foreach (IPS_GetInstanceListByModuleID('{BAB8E05C-9150-43B9-9F2B-E5215FA54F0A}') as $iid) {
+        // Reihenfolge nach Unabhängigkeit (Dashboards Einwand 12.09.2026):
+        // Zwei Netzzähler aus diesem Modul können GEMEINSAM verkehrt stehen —
+        // im Solarpark hatten beide NAPs zugleich PowerInvert falsch, der
+        // gegenseitige Vergleich hätte trotzdem „passt" gemeldet. Deshalb
+        // zuerst Wechselrichter-Netzmessung und PV-Erzeugung, ein anderer
+        // MeterHub-Netzzähler nur als Notlösung mit Hinweis.
+        $sameGrid = [];
+        $pv = [];
+        $pvNames = [];
+        foreach ([['{BAB8E05C-9150-43B9-9F2B-E5215FA54F0A}', 'MHUB_GetFunctions'], ['{ADF18291-2E60-4354-92F5-B96863C127C8}', 'MHUBV_GetFunctions']] as [$guid, $fn]) {
+            if (!function_exists($fn)) {
+                continue;
+            }
+            foreach (IPS_GetInstanceListByModuleID($guid) as $iid) {
                 if ($iid === $this->InstanceID || IPS_GetInstance($iid)['InstanceStatus'] !== 102) {
                     continue;
                 }
-                $f = json_decode((string)@MHUB_GetFunctions($iid), true);
-                if (!is_array($f) || ($f['latency'] ?? '') !== 'realtime') {
+                $f = json_decode((string)@$fn($iid), true);
+                if (!is_array($f) || ($f['latency'] ?? 'realtime') !== 'realtime') {
                     continue;
                 }
                 foreach ($f['assignments'] ?? [] as $as) {
-                    if (($as['function'] ?? '') === 'grid' && (int)($as['powerID'] ?? 0) > 0) {
-                        $refs[] = [(int)$as['powerID'], IPS_GetName($iid), 'same'];
+                    $pid = (int)($as['powerID'] ?? 0);
+                    if ($pid <= 0) {
+                        continue;
+                    }
+                    if (($as['function'] ?? '') === 'pv') {
+                        $pv[] = $pid;
+                        $pvNames[] = IPS_GetName($iid);
+                    } elseif (($as['function'] ?? '') === 'grid' && $fn === 'MHUB_GetFunctions') {
+                        $sameGrid[] = ['ids' => [$pid], 'label' => IPS_GetName($iid), 'relation' => 'same', 'independent' => false];
                     }
                 }
             }
         }
+        $refs = [];
         $ihub = [];
         if (function_exists('IHUB_GetFunctions') && @IPS_ModuleExists('{BBE2C593-1A91-426D-A714-29A9C7E87589}')) {
             foreach (IPS_GetInstanceListByModuleID('{BBE2C593-1A91-426D-A714-29A9C7E87589}') as $iid) {
@@ -5914,15 +5951,22 @@ class MeterHub extends IPSModule
         }
         foreach ($ihub as [$iid, $f]) {
             if ((int)($f['gridPowerID'] ?? 0) > 0) {
-                $refs[] = [(int)$f['gridPowerID'], IPS_GetName($iid) . ' (Netzmessung)', 'opposite'];
+                $refs[] = ['ids' => [(int)$f['gridPowerID']], 'label' => IPS_GetName($iid) . ' (Netzmessung)', 'relation' => 'opposite', 'independent' => true];
             }
         }
         foreach ($ihub as [$iid, $f]) {
             if ((int)($f['pvPowerID'] ?? 0) > 0) {
-                $refs[] = [(int)$f['pvPowerID'], IPS_GetName($iid) . ' (PV-Erzeugung)', 'pv'];
+                $pv[] = (int)$f['pvPowerID'];
+                $pvNames[] = IPS_GetName($iid);
             }
         }
-        return $refs;
+        // PV als Summe der Beträge: egal, wie herum ein PV-Zähler eingestellt
+        // ist — damit ist diese Quelle auch aus demselben Modul unabhängig.
+        $pv = array_slice(array_values(array_unique($pv)), 0, 20);
+        if ($pv) {
+            $refs[] = ['ids' => $pv, 'label' => count($pv) === 1 ? 'PV-Erzeugung ' . $pvNames[0] : 'PV-Erzeugung (' . count($pv) . ' Zähler)', 'relation' => 'pv', 'independent' => true];
+        }
+        return array_merge($refs, $sameGrid);
     }
 
     /** Gleichlauf zweier Leistungsreihen [Zeit => W] (Kosinus, vorzeichenempfindlich), nur Paare mit |W| ≥ $minW. Rückgabe [Wert −1…+1, Anzahl]. */
@@ -5975,17 +6019,28 @@ class MeterHub extends IPSModule
         return [($sxx > 0 && $syy > 0) ? $sxy / sqrt($sxx * $syy) : 0.0, $n];
     }
 
-    /** Bewertung aus der Übereinstimmung (+1 passt, −1 gegenläufig). Direkte Netzquelle: kritisch; nur PV-Vergleich: höchstens auffällig. */
-    private static function DirectionLevel(float $rel, bool $direct): array
+    /**
+     * Bewertung aus der Übereinstimmung (+1 passt, −1 gegenläufig).
+     * Netzquelle ('same'/'opposite'): ab ±0,6. PV ('pv', Korrelation mit
+     * Verbrauchern verwaschen): ab ±0,3 normal/auffällig, erst ab −0,8
+     * kritisch — so eindeutig ist es nur, wenn kaum Verbrauch dazwischen
+     * liegt (Solarpark) oder die Richtung wirklich verkehrt ist.
+     */
+    private static function DirectionLevel(float $rel, string $relation): array
     {
-        $th = $direct ? 0.6 : 0.3;
-        if ($rel >= $th) {
-            return ['normal', $th];
+        if ($relation === 'pv') {
+            if ($rel >= 0.3) {
+                return ['normal', 0.3];
+            }
+            if ($rel <= -0.8) {
+                return ['kritisch', 0.3];
+            }
+            return [$rel <= -0.3 ? 'auffaellig' : null, 0.3];
         }
-        if ($rel <= -$th) {
-            return [$direct ? 'kritisch' : 'auffaellig', $th];
+        if ($rel >= 0.6) {
+            return ['normal', 0.6];
         }
-        return [null, $th];
+        return [$rel <= -0.6 ? 'kritisch' : null, 0.6];
     }
 
     /** Zeile unter dem Schalter „Bezug/Einspeisung vertauscht". */

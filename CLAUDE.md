@@ -1163,7 +1163,7 @@ Stand ±1 %, Spuren ≥ 5 % getrennt; `PowerMismatch`: Viertelstunden Bezug − 
 Leistungsvorzeichen, Kanten per `ChangePoint`). Leistung erst, wenn die Energie keine
 Kreuzsprünge mehr hat. `AC_AddLoggedValues` lehnt Zeitstempel hinter noch ungeschriebenen
 Werten ab → Retry + Tag wiederherstellen (`RewriteDay`).
-Diagnose-Vertrag `MHUB_GetDiagnostics` 1.0: `{contractVersion, instanceID, checkedAt,
+Diagnose-Vertrag `MHUB_GetDiagnostics` 1.1 (1.1 = independent/referenceIDs; Quellen: IHUB-Netz, PV-Betragssumme, erst dann anderer MHUB-Netzzähler, der gemeinsam verdreht sein kann): `{contractVersion, instanceID, checkedAt,
 entries: [{type:'meter_direction', slot, label, level: normal|auffaellig|kritisch|null,
 threshold, reason, powerID, referencePowerID, referenceLabel, relation: same|opposite|pv,
 correlation, samples, checkedAt}]}`. InverterHub-Netz ist „+ = Einspeisung" (SUITE.md).
