@@ -2212,8 +2212,22 @@ class MHUB_InexogyDriver implements MHUB_MeterDriverInterface
         // Rohwert /10^10 → kWh; SetVarEnergykWh nimmt kWh entgegen.
         $imp = self::pick($v, ['energy']);
         $exp = self::pick($v, ['energyOut']);
-        if ($imp !== null) { $hub->SetVarEnergykWh('energy_import', $imp / 1e10); }
-        if ($exp !== null) { $hub->SetVarEnergykWh('energy_export', $exp / 1e10); }
+        foreach ([['energy_import', $imp], ['energy_export', $exp]] as [$ident, $raw]) {
+            if ($raw === null) {
+                continue;
+            }
+            $kwh = $raw / 1e10;
+            // Der Live-Zählerstand hinkt 15–20 min hinterher (Befund 12.09.2026:
+            // um 16:18 kam der offizielle Wert von 16:00), wird aber mit dem
+            // Ankunftszeitpunkt archiviert. Liegt er nicht über dem neuesten
+            // archivierten (meist offiziellen) Stand, entstünde ein Rückschritt —
+            // Symcons Zähler-Verdichtung zählt jeden davon doppelt. Nicht schreiben.
+            $latest = method_exists($hub, 'LatestArchivedEnergyKWh') ? $hub->LatestArchivedEnergyKWh($ident) : null;
+            if ($latest !== null && $kwh <= $latest) {
+                continue;
+            }
+            $hub->SetVarEnergykWh($ident, $kwh);
+        }
     }
 }
 
@@ -2953,6 +2967,8 @@ class MeterHub extends IPSModule
         // offizielle Wert sein (Dietmars Entscheidung 12.09.2026: nur die
         // Lücke reparieren).
         $this->RegisterPropertyBoolean('RepairBackward', true);
+        // Zeitraum für „Live-Zwischenwerte bereinigen" (Inexogy, 0.26.9).
+        $this->RegisterPropertyInteger('InexogyCleanupDays', 30);
         $this->RegisterPropertyInteger('IntervalFast', 5);
         $this->RegisterPropertyInteger('IntervalSlow', 60);
         // Archiv-Verdichtung, konfigurierbar statt fest im Code (Dietmars
@@ -3005,7 +3021,7 @@ class MeterHub extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.26.6';
+    private const NEWS_VERSION = '0.26.9';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -3044,6 +3060,7 @@ class MeterHub extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
+                ['type' => 'Label', 'caption' => '• 🧹 Inexogy: Ins Zähler-Archiv kommen nur noch die offiziellen Viertelstundenwerte. Der nachhinkende Live-Wert erzeugte vorher viele kleine Rückschritte, die Symcons Verdichtung doppelt zählte — Tageswerte waren dadurch zu hoch. Die Vergangenheit lässt sich im Inexogy-Bereich mit Probelauf bereinigen.'],
                 ['type' => 'Label', 'caption' => '• 🛡️ Zählerschutz: Energie-Zählerstände werden nur noch übernommen, wenn sie größer als 0 sind und nicht rückwärts laufen — auch beim Inexogy-Archivnachtrag. Anlass: Inexogy füllte eine Übertragungslücke mit Zählerstand 0, im Archiv entstanden Scheinverbräuche von über 10 000 kWh je Viertelstunde. Ein echter Zählertausch wird erkannt (niedrigerer Stand über 30 Lesungen stabil) und protokolliert.'],
                 ['type' => 'Label', 'caption' => '• 🩺 Neues Panel „Energie-Archiv prüfen / reparieren": findet Nullwerte und Rückschritte im Archiv, zeigt sie im Probelauf und füllt Lücken auf Wunsch nach dem Verlauf eines Referenzzählers auf.'],
                 ['type' => 'Label', 'caption' => '• 🔧 Schonender für die Geräte: eine Modbus-Verbindung je Abfragezyklus statt einer je einzelner Anfrage. Viele Instanzen am selben Gerät (z. B. Dutzende Wechselrichter hinter einem blue\'Log) erzeugten vorher Tausende kurzlebige Verbindungen — manche Geräte verkraften das schlecht.'],
@@ -3565,6 +3582,10 @@ class MeterHub extends IPSModule
             ['type' => 'CheckBox', 'name' => 'InexogyAutoBackfillEnabled', 'visible' => $isCloud, 'caption' => 'Lastgang automatisch wiederkehrend nachtragen'],
             ['type' => 'NumberSpinner', 'name' => 'InexogyAutoBackfillIntervalMin', 'visible' => $isCloud, 'caption' => 'alle … Minuten', 'minimum' => 15, 'maximum' => 1440],
             ['type' => 'NumberSpinner', 'name' => 'InexogyAutoBackfillDays', 'visible' => $isCloud, 'caption' => 'Obergrenze bei größerer Lücke (z. B. nach einem Ausfall): höchstens … Tage zurück', 'minimum' => 1, 'maximum' => 30],
+            ['type' => 'Label', 'name' => 'InexogyHintCleanup', 'visible' => $isCloud, 'caption' => '🧹 Live-Zwischenwerte: Der Live-Zählerstand von Inexogy hinkt 15–20 min hinterher, landete aber mit dem Ankunftszeitpunkt zwischen den offiziellen Viertelstundenwerten im Archiv. Jeder so entstandene kleine Rückschritt wird von Symcons Zähler-Verdichtung doppelt gezählt (Tageswerte zu hoch). Seit 0.26.9 passiert das nicht mehr; hier lässt sich die Vergangenheit bereinigen — nur überholte Live-Werte, offizielle Werte bleiben unangetastet.'],
+            ['type' => 'NumberSpinner', 'name' => 'InexogyCleanupDays', 'visible' => $isCloud, 'caption' => 'Zeitraum der Bereinigung (höchstens 45 Tage)', 'minimum' => 1, 'maximum' => 45, 'suffix' => ' Tage'],
+            ['type' => 'Button', 'name' => 'InexogyCleanupCheck', 'visible' => $isCloud, 'caption' => '🔎  Live-Zwischenwerte prüfen (Probelauf, ändert nichts)', 'onClick' => 'echo MHUB_CheckInexogyArchiveCleanup($id, $InexogyCleanupDays);'],
+            ['type' => 'Button', 'name' => 'InexogyCleanupRun', 'visible' => $isCloud, 'caption' => '🧹  Live-Zwischenwerte bereinigen', 'confirm' => 'Überholte Live-Zwischenwerte aus dem Archiv löschen? Vorher den Probelauf ansehen — das Löschen lässt sich nicht rückgängig machen.', 'onClick' => 'echo MHUB_CleanInexogyArchive($id, $InexogyCleanupDays);'],
             ['type' => 'ValidationTextBox', 'name' => 'Host', 'visible' => !$isCloud, 'caption' => 'IP-Adresse', 'validate' => $isCloud ? '' : '^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$'],
             ['type' => 'NumberSpinner', 'name' => 'Port', 'visible' => !$isCloud, 'caption' => 'TCP-Port', 'minimum' => 1, 'maximum' => 65535],
             ['type' => 'NumberSpinner', 'name' => 'UnitId', 'visible' => !$isCloud, 'caption' => 'Unit ID', 'minimum' => 1, 'maximum' => 247],
@@ -3914,7 +3935,7 @@ class MeterHub extends IPSModule
     public function OnChangeMeter(string $meter)
     {
         $isCloud = in_array($meter, self::CLOUD_METERS, true);
-        foreach (['InexogyIntro', 'InexogyEmail', 'InexogyPassword', 'InexogyLoginButton', 'InexogyMeterID', 'InexogyHintPoll', 'InexogyHintMigration', 'InexogyHintBackfill', 'InexogyBackfillDays', 'InexogyBackfillButton', 'InexogyHintAutoBackfill', 'InexogyAutoBackfillEnabled', 'InexogyAutoBackfillIntervalMin', 'InexogyAutoBackfillDays'] as $f) {
+        foreach (['InexogyIntro', 'InexogyEmail', 'InexogyPassword', 'InexogyLoginButton', 'InexogyMeterID', 'InexogyHintPoll', 'InexogyHintMigration', 'InexogyHintBackfill', 'InexogyBackfillDays', 'InexogyBackfillButton', 'InexogyHintAutoBackfill', 'InexogyAutoBackfillEnabled', 'InexogyAutoBackfillIntervalMin', 'InexogyAutoBackfillDays', 'InexogyHintCleanup', 'InexogyCleanupDays', 'InexogyCleanupCheck', 'InexogyCleanupRun'] as $f) {
             $this->UpdateFormField($f, 'visible', $isCloud);
         }
         if (!$isCloud) {
@@ -4440,6 +4461,18 @@ class MeterHub extends IPSModule
             $chunkFrom = $chunkTo;
         }
 
+        // Live-Zwischenwerte, die jetzt von offiziellen Viertelstundenwerten
+        // abgedeckt sind, entfernen (0.26.9) — sonst liegen zwei Quellen mit
+        // leicht verschiedenen Ständen im selben Zähler-Archiv, jeder
+        // Rückschritt wird von Symcons Zähler-Verdichtung doppelt gezählt
+        // (Befund 12.09.2026: +1,5 kWh Bezug am 10.09., rund 60 %).
+        $cleaned = 0;
+        foreach (['energy', 'energyOut'] as $ef) {
+            if (isset($vids[$ef])) {
+                $cleaned += $this->CleanStaleLivePoints($archiveID, $vids[$ef], $fromOverall - 1800, time(), true)[0];
+            }
+        }
+
         // Aggregation erst einmal am Ende neu bilden, nicht je Block —
         // AC_ReAggregateVariable() bezieht sich ohnehin auf die ganze
         // Variable, wiederholtes Aufrufen je Block wäre nur unnötige Last.
@@ -4454,6 +4487,9 @@ class MeterHub extends IPSModule
             ? date('Y-m-d H:i', $fromOverall) . ' – ' . date('Y-m-d H:i', $toOverall) . " ({$spanH} h)"
             : date('Y-m-d', $fromOverall) . ' – ' . date('Y-m-d', $toOverall);
         $out = ["Zeitraum: $range, in {$chunkDays}-Tage-Blöcken verarbeitet"];
+        if ($cleaned > 0) {
+            $out[] = '🧹 ' . $cleaned . ' Live-Zwischenwert(e) entfernt, die jetzt von offiziellen Viertelstundenwerten abgedeckt sind.';
+        }
         if ($rejected > 0) {
             $out[] = '⚠️ ' . $rejected . ' Datensatz/-sätze von Inexogy verworfen (Zählerstand 0 oder rückwärts — Inexogy füllt Übertragungslücken mit 0). Die Lücke bleibt offen; „Energie-Archiv prüfen" kann sie auffüllen.';
         }
@@ -4990,6 +5026,165 @@ class MeterHub extends IPSModule
             AC_ReAggregateVariable($ac, $pvid);
         }
         IPS_LogMessage('MeterHub', IPS_GetName($this->InstanceID) . ': Energie-Archiv repariert — ' . str_replace("\n", ' | ', implode("\n", $lines)));
+        return implode("\n", $lines);
+    }
+
+    // -----------------------------------------------------------------------
+    // Inexogy: nur offizielle Viertelstundenwerte im Zähler-Archiv (0.26.9,
+    // Dietmars Auftrag 12.09.2026). Live- und Viertelstundenwerte lagen
+    // gemischt im Archiv; der Live-Wert hinkt hinterher, trägt aber den
+    // Ankunftszeitpunkt → hunderte kleine Rückschritte, die Symcons
+    // Zähler-Verdichtung jeweils doppelt zählt.
+    // -----------------------------------------------------------------------
+
+    /** Neuester archivierter Stand eines Energiezählers in kWh (für Treiber), null = keiner. */
+    public function LatestArchivedEnergyKWh(string $ident): ?float
+    {
+        $vid = $this->FindVarByIdent($this->EnergyIdentForInvert($ident));
+        $acs = IPS_GetInstanceListByModuleID('{43192F0B-135B-4CE7-A0A7-1475603F3060}');
+        if (!$vid || count($acs) === 0 || !AC_GetLoggingStatus($acs[0], $vid)) {
+            return null;
+        }
+        $r = AC_GetLoggedValues($acs[0], $vid, 0, time(), 1);
+        if (!$r) {
+            return null;
+        }
+        $v = (float)$r[0]['Value'];
+        return $this->ReadPropertyBoolean('EnergyUnitWh') ? $v / 1000.0 : $v;
+    }
+
+    /**
+     * Welche Archivpunkte sind überholte Live-Zwischenwerte? Offizielle
+     * Inexogy-Werte liegen exakt auf dem Viertelstunden-Raster (ts % 900 == 0),
+     * Live-Werte zu beliebigen Sekunden. Entfernt wird ein Live-Punkt, wenn
+     * offizielle Werte ihn eng umschließen (je höchstens 30 min davor und
+     * danach) oder wenn er nach dem letzten offiziellen Wert unter dessen Stand
+     * liegt. Live-Punkte in Zeiträumen ohne offizielle Daten bleiben — dort
+     * sind sie die einzige Information. Offizielle Punkte werden nie gewählt.
+     */
+    private static function SelectStaleLivePoints(array $pts): array
+    {
+        $aligned = [];
+        foreach ($pts as [$ts]) {
+            if ($ts % 900 === 0) {
+                $aligned[] = $ts;
+            }
+        }
+        if (!$aligned) {
+            return [];
+        }
+        $del = [];
+        $maxOff = -INF;
+        $ai = 0;
+        $n = count($aligned);
+        foreach ($pts as [$ts, $v]) {
+            if ($ts % 900 === 0) {
+                $maxOff = max($maxOff, $v);
+                continue;
+            }
+            while ($ai < $n && $aligned[$ai] < $ts) {
+                $ai++;
+            }
+            $prev = $ai > 0 ? $aligned[$ai - 1] : null;
+            $next = $ai < $n ? $aligned[$ai] : null;
+            $covered = $prev !== null && $next !== null && $ts - $prev <= 1800 && $next - $ts <= 1800;
+            if ($covered || ($next === null && $v < $maxOff)) {
+                $del[] = $ts;
+            }
+        }
+        return $del;
+    }
+
+    /** [doppelt gezählte Energie, Anzahl Rückschritte] einer Zählerreihe — was Symcons Zähler-Verdichtung zu viel zählt. */
+    private static function CounterOvercount(array $pts): array
+    {
+        if (count($pts) < 2) {
+            return [0.0, 0];
+        }
+        $pos = 0.0;
+        $back = 0;
+        $prev = null;
+        foreach ($pts as [, $v]) {
+            if ($prev !== null) {
+                $d = $v - $prev;
+                if ($d > 0) {
+                    $pos += $d;
+                } elseif ($d < 0) {
+                    $back++;
+                }
+            }
+            $prev = $v;
+        }
+        $net = max(0.0, $pts[count($pts) - 1][1] - $pts[0][1]);
+        return [max(0.0, $pos - $net), $back];
+    }
+
+    /** Überholte Live-Zwischenwerte finden und (mit $apply) löschen. [Anzahl, Überzählung vorher, nachher, Rückschritte vorher, nachher] */
+    private function CleanStaleLivePoints(int $ac, int $vid, int $from, int $to, bool $apply): array
+    {
+        $pts = $this->LoadArchivePoints($ac, $vid, $from, $to);
+        $del = self::SelectStaleLivePoints($pts);
+        [$ob, $bb] = self::CounterOvercount($pts);
+        $set = array_flip($del);
+        $kept = [];
+        foreach ($pts as $p) {
+            if (!isset($set[$p[0]])) {
+                $kept[] = $p;
+            }
+        }
+        [$oa, $ba] = self::CounterOvercount($kept);
+        if ($apply && $del) {
+            foreach ($del as $ts) {
+                AC_DeleteVariableData($ac, $vid, $ts, $ts);
+            }
+            AC_ReAggregateVariable($ac, $vid);
+        }
+        return [count($del), $ob, $oa, $bb, $ba];
+    }
+
+    public function CheckInexogyArchiveCleanup(int $Days): string
+    {
+        return $this->InexogyCleanup($Days, false);
+    }
+
+    public function CleanInexogyArchive(int $Days): string
+    {
+        return $this->InexogyCleanup($Days, true);
+    }
+
+    private function InexogyCleanup(int $days, bool $apply): string
+    {
+        if (!in_array($this->ReadPropertyString('Meter'), self::CLOUD_METERS, true)) {
+            return 'ℹ️ Nur für Inexogy-Zähler.';
+        }
+        $acs = IPS_GetInstanceListByModuleID('{43192F0B-135B-4CE7-A0A7-1475603F3060}');
+        if (count($acs) === 0) {
+            return '❌ Kein Archiv-Modul (Archive Control) gefunden.';
+        }
+        $ac = $acs[0];
+        $days = max(1, min(45, $days));
+        $to = time();
+        $from = $to - $days * 86400;
+        $kwh = fn(float $x) => number_format($x, 3, ',', '.');
+        $lines = [$apply ? '✅ Live-Zwischenwerte bereinigt (' . $days . ' Tage):' : '🔎 Probelauf, nichts geändert (' . $days . ' Tage):'];
+        $total = 0;
+        foreach (['energy_import' => 'Bezug', 'energy_export' => 'Einspeisung'] as $ident => $label) {
+            $vid = $this->FindVarByIdent($ident);
+            if (!$vid || !AC_GetLoggingStatus($ac, $vid)) {
+                continue;
+            }
+            [$n, $ob, $oa, $bb, $ba] = $this->CleanStaleLivePoints($ac, $vid, $from, $to, $apply);
+            $total += $n;
+            $lines[] = "$label (#$vid): $n Live-Zwischenwert(e) " . ($apply ? 'entfernt' : 'würden entfernt')
+                . " — Rückschritte $bb → $ba, doppelt gezählte Energie " . $kwh($ob) . ' → ' . $kwh($oa) . ' kWh.';
+        }
+        if (!$apply) {
+            $lines[] = $total > 0
+                ? '→ „Bereinigen" führt genau das aus. Offizielle Viertelstundenwerte bleiben unangetastet, Live-Werte ohne offizielle Daten in der Nähe ebenso.'
+                : '→ Nichts zu bereinigen.';
+        } elseif ($total > 0) {
+            IPS_LogMessage('MeterHub', IPS_GetName($this->InstanceID) . ': ' . str_replace("\n", ' | ', implode("\n", $lines)));
+        }
         return implode("\n", $lines);
     }
 

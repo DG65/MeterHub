@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.26.9-beta.1 (2026-09-12)
+
+- **🧹 Inexogy: nur offizielle Viertelstundenwerte im Zähler-Archiv.** Befund an Dietmars
+  Anlage: Der Live-Zählerstand von Inexogy hinkt 15–20 min hinterher (um 16:18 kam der
+  offizielle Wert von 16:00), wurde aber mit dem Ankunftszeitpunkt archiviert, zwischen
+  den offiziellen Viertelstundenwerten des Nachtrags. Das ergab hunderte kleine
+  Rückschritte (523/566 in 14 Tagen). Symcons Zähler-Verdichtung zählt jeden davon
+  doppelt: Am 10.09. zeigte der Tageswert 3,973 statt 2,454 kWh Bezug.
+  - Live: Ein Zählerstand, der nicht über dem neuesten archivierten Stand liegt, wird
+    nicht mehr geschrieben.
+  - Nachtrag: Nach jedem Lauf werden die Live-Zwischenwerte entfernt, die jetzt von
+    offiziellen Werten eng umschlossen sind. Offizielle Werte (Viertelstunden-Raster)
+    werden nie angefasst, Live-Werte in Zeiträumen ohne offizielle Daten bleiben.
+  - Neu im Inexogy-Bereich: „Live-Zwischenwerte prüfen" (Probelauf) und „bereinigen"
+    (`MHUB_CheckInexogyArchiveCleanup`/`MHUB_CleanInexogyArchive`) für die Vergangenheit.
+    Der Probelauf zeigt die Rückschritte und die doppelt gezählte Energie vorher und
+    nachher.
+- Prüfstand Block 38.
+
 ## 0.26.8-beta.1 (2026-09-12)
 
 - **Energie-Archiv prüfen/reparieren: Schalter „Einzelne Rückschritte mitreparieren"**

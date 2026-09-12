@@ -1160,9 +1160,14 @@ das Archiv (dort liegen Live-Werte, die minimal vom offiziellen 15-min-Wert abwe
 sonst würden gültige Punkte verworfen). Reparatur `EnergyArchiveRepair()`: Referenzzähler
 wird über die Zunahme der 24 h vor der Lücke zugeordnet, nie über den Namen (PAC2200 bei
 Dietmar hatte Bezug/Abgabe vertauscht); Leistung in Nullwert-Lücken aus Bezug −
-Einspeisung neu berechnet (kein Vorzeichenproblem). Offener Punkt: Live- und
-15-min-Werte landen im selben Archiv → winzige Rückschritte (Befund 12.09., mit Dietmar
-noch nicht entschieden).
+Einspeisung neu berechnet (kein Vorzeichenproblem). **Live- und 15-min-Werte (0.26.9, gelöst):** Der Inexogy-Live-Stand hinkt 15–20 min
+hinterher, trägt aber den Ankunftszeitpunkt → Rückschritte zwischen den offiziellen Werten,
+die Symcons Zähler-Verdichtung jeweils DOPPELT zählt (10.09.: Tageswert 3,973 statt 2,454
+kWh). Regeln: Live nur schreiben, wenn > neuester Archivstand (`LatestArchivedEnergyKWh`);
+nach jedem Nachtrag `CleanStaleLivePoints()` — offizielle Werte erkennt man am
+Viertelstunden-Raster (`ts % 900 === 0`), entfernt werden nur Live-Punkte, die offizielle
+eng umschließen (≤ 30 min je Seite) oder die am Ende unter dem letzten offiziellen Stand
+liegen. Maß für den Schaden: `CounterOvercount()` (Summe positiver Schritte − Nettozunahme).
 
 ## Modbus: eine Verbindung je Zyklus (0.26.5, 12.09.2026)
 

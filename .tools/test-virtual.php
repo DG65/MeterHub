@@ -1883,5 +1883,30 @@ $open37 = $m37('FindCounterGaps', [[1, 100.0], [2, 0.0], [3, 0.0]]);
 check('37: Lücke bis zum Ende bleibt offen (kein gültiger Stand danach)', count($open37) === 1 && $open37[0]['after'] === null);
 check('37: InterpAt interpoliert und liefert außerhalb null', $m37('InterpAt', [[0, 0.0], [10, 10.0]], 5) === 5.0 && $m37('InterpAt', [[0, 0.0], [10, 10.0]], 11) === null);
 
+echo "\n38) Inexogy: nur offizielle Viertelstundenwerte im Archiv (Befund 12.09.2026: Live-Werte hinken hinterher, Rückschritte doppelt gezählt)\n";
+$q = 1789200000; // auf dem Viertelstunden-Raster (durch 900 teilbar)
+check('38: Testbasis liegt auf dem Raster', $q % 900 === 0);
+$ser38 = [
+    [$q,            100.0],   // offiziell 16:00
+    [$q + 300,      99.95],   // live, veraltet, von offiziellen umschlossen
+    [$q + 900,      100.2],   // offiziell 16:15
+    [$q + 1080,     100.0],   // live 16:18 = Stand von 16:00 (echtes Muster)
+    [$q + 1800,     100.5],   // offiziell 16:30
+    [$q + 2400,     100.3],   // live nach dem letzten offiziellen, darunter → weg
+    [$q + 3000,     100.6],   // live nach dem letzten offiziellen, darüber → bleibt
+];
+$del38 = $m37('SelectStaleLivePoints', $ser38);
+check('38: genau die drei überholten Live-Werte gewählt, offizielle nie', $del38 === [$q + 300, $q + 1080, $q + 2400], json_encode($del38));
+$gap38 = [[$q, 100.0], [$q + 3600, 100.4], [$q + 7200, 100.6], [$q + 10800, 101.0]]; // live-Werte mitten in 3 h ohne offizielle Daten
+$gap38[1][0] += 17; $gap38[2][0] += 23;
+check('38: Live-Werte in Zeiträumen ohne offizielle Daten bleiben', $m37('SelectStaleLivePoints', $gap38) === []);
+check('38: ohne offizielle Werte (Nachtrag aus) wird nichts gewählt', $m37('SelectStaleLivePoints', [[$q + 7, 1.0], [$q + 99, 2.0]]) === []);
+[$ob38, $bb38] = $m37('CounterOvercount', $ser38);
+$kept38 = array_values(array_filter($ser38, fn($p) => !in_array($p[0], $del38, true)));
+[$oa38, $ba38] = $m37('CounterOvercount', $kept38);
+// Positive Schritte 0,25 + 0,5 + 0,3 = 1,05 kWh, Nettozunahme 0,6 kWh → 0,45 kWh doppelt gezählt.
+check('38: vorher 3 Rückschritte und 0,45 kWh doppelt gezählt', $bb38 === 3 && abs($ob38 - 0.45) < 1e-9, json_encode([$ob38, $bb38]));
+check('38: nachher 0 Rückschritte, nichts doppelt gezählt', $ba38 === 0 && abs($oa38) < 1e-9, json_encode([$oa38, $ba38]));
+
 echo "\n" . ($fails === 0 ? "ALLE PRÜFUNGEN BESTANDEN\n" : "$fails PRÜFUNG(EN) FEHLGESCHLAGEN\n");
 exit($fails === 0 ? 0 : 1);
