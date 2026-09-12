@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.27.0-beta.1 (2026-09-12)
+
+Anlass: An Dietmars PAC2200 und an beiden Solarpark-Netzanschlüssen stand „Bezug/Einspeisung
+vertauscht" zeitweise falsch. Seit 0.22.7 tauscht der Schalter die Energie-Ziele: Jedes
+Umschalten ließ Bezug und Einspeisung aufeinander springen, und die gespeicherte Leistung behielt
+vor dem Umschalten ihr altes Vorzeichen. Korrigiert werden musste das per Einzelskript. Jetzt
+kann es jeder Nutzer selbst.
+
+- **↔️ Umschalten ohne Sprung.** Ändert sich PowerInvert, tauschen die Energie-Variablen ihre
+  Rolle (Ident/Name): `energy_import*` ↔ `energy_export*` und die Sammel-Variablen
+  `fn_*_import` ↔ `fn_*_export`. Jedes Zählerregister landet weiter in derselben Variable, es
+  gibt keinen Sprung und keinen Fehlalarm im Zählerschutz. Die Bezeichnung passt zur neuen
+  Richtung, Zurückschalten macht es rückgängig. Beim ersten Start mit 0.27.0 wird die bestehende
+  Anordnung nur übernommen. Das Meldungsprotokoll nennt die getauschten Variablen, damit Skripte
+  mit festen IDs geprüft werden können.
+- **🛠️ Neues Panel „Richtung im Archiv prüfen / korrigieren"** für frühere Umschaltungen, mit
+  Probelauf, JSON-Sicherung vorab und tageweiser Verarbeitung (speicherfest):
+  - Energie: Jede Zählervariable wird wieder eine durchgehende Reihe. Ein vertauschter
+    Abschnitt beginnt, wenn ein Stand auf den des anderen Zählers springt. Ein Einheitenwechsel
+    (Wh→kWh) oder Zählertausch ist kein solcher Sprung. Reicht der Abschnitt bis heute,
+    tauschen die Variablen zusätzlich ihre Rolle.
+  - Leistung: Je Viertelstunde wird die Richtung aus Bezug − Einspeisung mit dem Vorzeichen
+    der gespeicherten Leistung verglichen. Gegenläufige Abschnitte werden gedreht, die Kanten
+    minutengenau bestimmt.
+  - Lehnt das Archiv das Nachtragen ab (Schreibpuffer), versucht das Modul es erneut und
+    stellt den Tag sonst unverändert wieder her.
+- **🧭 Richtungsprüfung** für Zuordnungen „Netzanschluss". Verglichen wird mit einem anderen
+  MeterHub-Netzzähler (gleichläufig), mit der InverterHub-Netzmessung (gegenläufig) und
+  hilfsweise mit der PV-Erzeugung (nur Hinweis). Das Ergebnis steht beim Schalter und landet
+  einmal im Meldungsprotokoll. Neu ist der Diagnose-Vertrag **`MHUB_GetDiagnostics` 1.0**
+  (Format wie `IHUBMON_GetDiagnostics`, Eintrag `meter_direction`), 30 min zwischengespeichert.
+- Prüfstand `test-powerinvert.php` Blöcke 6–8.
+
 ## 0.26.9-beta.1 (2026-09-12)
 
 - **🧹 Inexogy: nur offizielle Viertelstundenwerte im Zähler-Archiv.** Befund an Dietmars

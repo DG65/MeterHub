@@ -1149,6 +1149,25 @@ Setter (`SetVarEnergyWh()`/`SetVarEnergykWh()`), nicht in einem einzelnen Treibe
 in `.tools/test-powerinvert.php` (eigener, leichtgewichtiger IPSModule-Stub, kein
 Objektbaum/Treiber nötig — nur Property/Attribut/Variablenwerte).
 
+**Nachtrag 0.27.0 (12.09.2026): Umschalten ohne Sprung.** Das Umleiten allein ließ bei JEDEM
+Umschalten beide Zählerstände aufeinander springen (live an PAC2200 26.08. und Solarpark-NAPs
+11.09., von Hand repariert). Jetzt tauscht `SyncInvertLayout()` (ApplyChanges, VOR
+`RegisterVariables()`) beim Umschalten die Idents jedes Paars (`EnergyPairs()`: auch
+`fn_*_import/_export`). Zusammen mit dem Umleiten landet jedes Zählerregister immer in
+derselben Variable-ID; nur die Bezeichnung folgt der Richtung. Attribut `InvertLayout`:
+`''` = erster Start → übernehmen, nie tauschen. Regel für das Archiv: jede Variable = eine
+durchgehende Zählerreihe; ob die Bezeichnung stimmt, entscheidet allein, ob PowerInvert
+richtig steht (dafür `GetDiagnostics()`).
+Altfälle: `DirectionArchive()` (`RetrackStep`: Spurwechsel nur bei Sprung auf den anderen
+Stand ±1 %, Spuren ≥ 5 % getrennt; `PowerMismatch`: Viertelstunden Bezug − Einspeisung gegen
+Leistungsvorzeichen, Kanten per `ChangePoint`). Leistung erst, wenn die Energie keine
+Kreuzsprünge mehr hat. `AC_AddLoggedValues` lehnt Zeitstempel hinter noch ungeschriebenen
+Werten ab → Retry + Tag wiederherstellen (`RewriteDay`).
+Diagnose-Vertrag `MHUB_GetDiagnostics` 1.0: `{contractVersion, instanceID, checkedAt,
+entries: [{type:'meter_direction', slot, label, level: normal|auffaellig|kritisch|null,
+threshold, reason, powerID, referencePowerID, referenceLabel, relation: same|opposite|pv,
+correlation, samples, checkedAt}]}`. InverterHub-Netz ist „+ = Einspeisung" (SUITE.md).
+
 ## Zählerschutz und Archiv-Reparatur (0.26.6, 12.09.2026)
 
 Inexogy füllt Übertragungslücken des Smart-Meter-Gateways mit **Zählerstand 0** (live

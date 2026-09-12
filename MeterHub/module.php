@@ -2969,6 +2969,13 @@ class MeterHub extends IPSModule
         $this->RegisterPropertyBoolean('RepairBackward', true);
         // Zeitraum für „Live-Zwischenwerte bereinigen" (Inexogy, 0.26.9).
         $this->RegisterPropertyInteger('InexogyCleanupDays', 30);
+        // Richtung (0.27.0): für welche PowerInvert-Stellung die Energie-
+        // Variablen gerade angeordnet sind ('' = noch nie abgeglichen, 'on'/
+        // 'off'), siehe SyncInvertLayout(); Prüfzeitraum der Archiv-Korrektur;
+        // zwischengespeicherte Richtungsprüfung (GetDiagnostics()).
+        $this->RegisterAttributeString('InvertLayout', '');
+        $this->RegisterPropertyInteger('DirectionRepairDays', 60);
+        $this->RegisterAttributeString('DirectionDiag', '');
         $this->RegisterPropertyInteger('IntervalFast', 5);
         $this->RegisterPropertyInteger('IntervalSlow', 60);
         // Archiv-Verdichtung, konfigurierbar statt fest im Code (Dietmars
@@ -3021,7 +3028,7 @@ class MeterHub extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.26.9';
+    private const NEWS_VERSION = '0.27.0';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -3060,6 +3067,9 @@ class MeterHub extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
+                ['type' => 'Label', 'caption' => '• ↔️ „Bezug/Einspeisung vertauscht" umschalten ohne Sprung: Die beiden Energiezähler-Variablen tauschen dabei ihre Rolle, jede zählt mit ihrem Verlauf weiter. Vorher sprangen Bezug und Einspeisung aufeinander — Tages- und Monatswerte zeigten riesige Scheinverbräuche.'],
+                ['type' => 'Label', 'caption' => '• 🧭 Richtungsprüfung beim Schalter (Netzanschluss): Vergleich mit einem zweiten Netzzähler oder der Netzmessung des Wechselrichters, hilfsweise mit der PV-Erzeugung. Misst der Zähler offenbar verkehrt herum, steht das dort und einmal im Meldungsprotokoll; das Dashboard kann es über MHUB_GetDiagnostics anzeigen.'],
+                ['type' => 'Label', 'caption' => '• 🛠️ Neues Panel „Richtung im Archiv prüfen / korrigieren" für frühere Umschaltungen: macht vertauschte Energie-Abschnitte wieder durchgehend und dreht gegenläufig gespeicherte Leistung — mit Probelauf und Sicherung vorab.'],
                 ['type' => 'Label', 'caption' => '• 🧹 Inexogy: Ins Zähler-Archiv kommen nur noch die offiziellen Viertelstundenwerte. Der nachhinkende Live-Wert erzeugte vorher viele kleine Rückschritte, die Symcons Verdichtung doppelt zählte — Tageswerte waren dadurch zu hoch. Die Vergangenheit lässt sich im Inexogy-Bereich mit Probelauf bereinigen.'],
                 ['type' => 'Label', 'caption' => '• 🛡️ Zählerschutz: Energie-Zählerstände werden nur noch übernommen, wenn sie größer als 0 sind und nicht rückwärts laufen — auch beim Inexogy-Archivnachtrag. Anlass: Inexogy füllte eine Übertragungslücke mit Zählerstand 0, im Archiv entstanden Scheinverbräuche von über 10 000 kWh je Viertelstunde. Ein echter Zählertausch wird erkannt (niedrigerer Stand über 30 Lesungen stabil) und protokolliert.'],
                 ['type' => 'Label', 'caption' => '• 🩺 Neues Panel „Energie-Archiv prüfen / reparieren": findet Nullwerte und Rückschritte im Archiv, zeigt sie im Probelauf und füllt Lücken auf Wunsch nach dem Verlauf eines Referenzzählers auf.'],
@@ -3164,6 +3174,9 @@ class MeterHub extends IPSModule
         parent::ApplyChanges();
 
         $this->CreateProfiles();
+        // Vor RegisterVariables(): die tauscht danach Namen/Positionen passend
+        // zu den neuen Idents mit.
+        $this->SyncInvertLayout();
         $this->RegisterVariables();
 
         // Bereitschaft: Modbus-Zähler brauchen eine IP, Cloud-Zähler ein
@@ -3234,6 +3247,13 @@ class MeterHub extends IPSModule
         }
         $this->UpdateMirrors();
         $this->MaybeAutoBackfillInexogy();
+        // Richtungsprüfung (0.27.0): höchstens alle 30 min neu gerechnet,
+        // ein neuer Befund landet einmal im Log — darf das Lesen nie stören.
+        try {
+            $this->GetDiagnostics();
+        } catch (\Throwable $e) {
+            $this->SendDebug('Richtungsprüfung', $e->getMessage(), 0);
+        }
     }
 
     /**
@@ -3876,6 +3896,22 @@ class MeterHub extends IPSModule
                     ],
                 ],
                 [
+                    // Richtung im Archiv (0.27.0): Altfälle früherer
+                    // PowerInvert-Umschaltungen. Zuerst immer Probelauf.
+                    'type'    => 'ExpansionPanel',
+                    'caption' => '↔️  Richtung im Archiv prüfen / korrigieren',
+                    'expanded' => false,
+                    'items' => [
+                        ['type' => 'Label', 'caption' => 'Für frühere Umschaltungen von „Bezug/Einspeisung vertauscht" (vor Version 0.27.0): Damals sprangen Bezug und Einspeisung aufeinander, und die gespeicherte Leistung behielt vor dem Umschalten ihr altes Vorzeichen. Seit 0.27.0 passiert beim Umschalten nichts mehr davon.'],
+                        ['type' => 'Label', 'caption' => 'Energie: Jede Zählervariable wird wieder eine durchgehende Reihe. Vertauschte Abschnitte erkennt das Modul daran, dass ein Stand auf den des anderen Zählers springt. Ein Einheitenwechsel oder ein Zählertausch ist kein solcher Sprung und bleibt unberührt.'],
+                        ['type' => 'Label', 'caption' => 'Leistung: Je Viertelstunde wird die Richtung aus den Zählerständen (Bezug − Einspeisung) mit dem Vorzeichen der gespeicherten Leistung verglichen. Gegenläufige Abschnitte werden gedreht, die Kanten minutengenau bestimmt. Das geht erst, wenn die Energie stimmt — bei Bedarf also zweimal prüfen.'],
+                        ['type' => 'Label', 'caption' => 'Ob die Richtung heute stimmt, zeigt die Richtungsprüfung unter „Datenpunkte" beim Schalter. Diese Korrektur macht das Archiv nur in sich stimmig. Vor jeder Änderung wird als JSON-Datei ins Symcon-Verzeichnis gesichert.'],
+                        ['type' => 'NumberSpinner', 'name' => 'DirectionRepairDays', 'caption' => 'Zeitraum (höchstens 120 Tage)', 'minimum' => 1, 'maximum' => 120, 'suffix' => ' Tage'],
+                        ['type' => 'Button', 'caption' => '🔎  Prüfen (Probelauf, ändert nichts)', 'onClick' => 'echo MHUB_CheckDirectionArchive($id, $DirectionRepairDays);'],
+                        ['type' => 'Button', 'caption' => '🛠️  Korrigieren', 'confirm' => 'Die im Probelauf gezeigten Abschnitte jetzt im Archiv korrigieren? Vorher wird gesichert.', 'onClick' => 'echo MHUB_RepairDirectionArchive($id, $DirectionRepairDays);'],
+                    ],
+                ],
+                [
                     'type'    => 'ExpansionPanel',
                     'caption' => '📊  Datenpunkte',
                     'expanded' => true,
@@ -3885,6 +3921,7 @@ class MeterHub extends IPSModule
                             'name'    => 'PowerInvert',
                             'caption' => 'Bezug/Einspeisung vertauscht — invertiert Wirkleistung und tauscht die Energiezähler',
                         ],
+                        ['type' => 'Label', 'caption' => $this->DirectionFormText()],
                         [
                             'type' => 'PopupButton', 'caption' => 'Wann brauche ich das, und was macht es genau?', 'width' => '480px',
                             'popup' => [
@@ -3894,6 +3931,8 @@ class MeterHub extends IPSModule
                                     ['type' => 'Label', 'caption' => 'Bei der Wirkleistung reicht ein Vorzeichenwechsel (+/−), das macht dieser Schalter automatisch.'],
                                     ['type' => 'Label', 'caption' => 'Bei den Energiezählern reicht das NICHT: „Bezug" und „Abgabe" sind zwei getrennte, immer positive Zählerstände. Ein Vorzeichenwechsel würde daraus negative Zählerstände machen. Richtig ist stattdessen, die beiden Zielvariablen zu VERTAUSCHEN — ein Wert, der eigentlich zum Bezugszähler gehört, landet dann korrekt in der Abgabe-Variable und umgekehrt. Genau das macht dieser Schalter zusätzlich zum Vorzeichenwechsel.'],
                                     ['type' => 'Label', 'caption' => 'Hat dieser Zähler nur eine Richtung (z. B. reine Verbraucher ohne Einspeisung), bleibt der vorhandene Wert einfach auf seiner Variable liegen — kein Datenverlust.'],
+                                    ['type' => 'Label', 'caption' => 'Umschalten ohne Sprung (seit 0.27.0): Beim Umschalten tauschen die beiden Energiezähler-Variablen ihre Rolle (Name und Ident). Jede behält ihren Zählerstand und ihren Verlauf — keine Sprünge, keine Scheinverbräuche in Tages- und Monatswerten. Zurückschalten macht es rückgängig. Dashboard und virtuelle Zähler übernehmen das von selbst; eigene Skripte mit fest eingetragenen Variablen-IDs bitte prüfen.'],
+                                    ['type' => 'Label', 'caption' => 'Ob der Schalter richtig steht, zeigt die Richtungsprüfung darunter: Sie vergleicht die Leistung mit einem zweiten Netzzähler oder der Netzmessung des Wechselrichters, hilfsweise mit der PV-Erzeugung. Frühere Umschaltungen (vor 0.27.0) korrigiert das Panel „Richtung im Archiv prüfen / korrigieren".'],
                                 ],
                             ],
                         ],
@@ -5027,6 +5066,929 @@ class MeterHub extends IPSModule
         }
         IPS_LogMessage('MeterHub', IPS_GetName($this->InstanceID) . ': Energie-Archiv repariert — ' . str_replace("\n", ' | ', implode("\n", $lines)));
         return implode("\n", $lines);
+    }
+
+    // -----------------------------------------------------------------------
+    // Richtung (0.27.0, Dietmars Auftrag 12.09.2026). Anlass: An Dietmars
+    // PAC2200 und an zwei Solarpark-Netzanschlüssen stand PowerInvert
+    // zeitweise falsch. Seit 0.22.7 tauscht der Schalter die Energie-ZIELE —
+    // jedes Umschalten ließ Bezug und Einspeisung aufeinander springen, die
+    // gespeicherte Leistung behielt vor dem Umschalten ihr altes Vorzeichen.
+    // Die Korrektur lief als Einzelskript; das muss jeder Nutzer ohne Hilfe
+    // können:
+    //   1. SyncInvertLayout(): beim Umschalten tauschen die Variablen ihre
+    //      Idents — jede behält ihren Zähler und Verlauf, kein Sprung.
+    //   2. DirectionArchive(): Altfälle im Archiv reparieren, Probelauf zuerst.
+    //   3. GetDiagnostics(): stimmt die Richtung heute? Vergleich mit einer
+    //      zweiten Quelle (Diagnose-Vertrag, Anzeige im Dashboard).
+    // -----------------------------------------------------------------------
+
+    /** Unter dieser Leistung (W) ist eine Richtung nicht sicher bestimmbar. */
+    private const DIR_MIN_W = 100.0;
+
+    /**
+     * Bezug/Abgabe-Paare dieser Instanz, [Bezug-Ident => [Bezug-ID, Abgabe-ID]]:
+     * energy_import{Suffix} ↔ energy_export{Suffix} und die Sammel-Variablen
+     * fn_*_import ↔ fn_*_export. Nur Paare mit beiden Seiten — genau die, die
+     * EnergyIdentForInvert() tauscht.
+     */
+    private function EnergyPairs(): array
+    {
+        $byIdent = [];
+        $collect = function (int $pid) use (&$collect, &$byIdent) {
+            foreach (IPS_GetChildrenIDs($pid) as $cid) {
+                $o = IPS_GetObject($cid);
+                if ($o['ObjectType'] === 0) {
+                    $collect($cid);
+                } elseif ($o['ObjectType'] === 2 && $o['ObjectIdent'] !== '') {
+                    $byIdent[$o['ObjectIdent']] = $cid;
+                }
+            }
+        };
+        $collect($this->InstanceID);
+        $pairs = [];
+        foreach ($byIdent as $ident => $vid) {
+            $other = self::CounterpartIdent($ident);
+            if ($other !== null && str_contains($ident, 'import') && isset($byIdent[$other])) {
+                $pairs[$ident] = [$vid, $byIdent[$other]];
+            }
+        }
+        ksort($pairs);
+        return $pairs;
+    }
+
+    /** Gegen-Ident eines Bezug-/Abgabe-Idents, null wenn es keiner ist. */
+    private static function CounterpartIdent(string $ident): ?string
+    {
+        if (preg_match('/^energy_import(_[a-z0-9]+)?$/', $ident)) {
+            return str_replace('energy_import', 'energy_export', $ident);
+        }
+        if (preg_match('/^energy_export(_[a-z0-9]+)?$/', $ident)) {
+            return str_replace('energy_export', 'energy_import', $ident);
+        }
+        if (preg_match('/^(fn_.+)_import$/', $ident, $m)) {
+            return $m[1] . '_export';
+        }
+        if (preg_match('/^(fn_.+)_export$/', $ident, $m)) {
+            return $m[1] . '_import';
+        }
+        return null;
+    }
+
+    /** Zwei Variablen tauschen Ident und Namen (Idents sind je Elternobjekt eindeutig, daher über einen Zwischen-Ident). */
+    private function SwapIdentPair(int $a, int $b): void
+    {
+        $oa = IPS_GetObject($a);
+        $ob = IPS_GetObject($b);
+        IPS_SetIdent($a, 'mhub_tausch_' . $a);
+        IPS_SetIdent($b, $oa['ObjectIdent']);
+        IPS_SetIdent($a, $ob['ObjectIdent']);
+        IPS_SetName($a, $ob['ObjectName']);
+        IPS_SetName($b, $oa['ObjectName']);
+    }
+
+    /**
+     * PowerInvert umgeschaltet? Dann tauschen die Energie-Variablen ihre
+     * Rolle (Ident/Name). EnergyIdentForInvert() leitet das Zählerregister
+     * ab jetzt ins andere Ziel — zusammen landet jedes Register weiter in
+     * derselben Variable: kein Sprung, der Zählerschutz schlägt nicht an, und
+     * der Verlauf jeder Variable bleibt eine durchgehende Zählerreihe. Die
+     * Bezeichnung passt danach zur neuen Richtung. Zurückschalten macht es
+     * rückgängig. Beim ersten Start einer Version mit dieser Regel (Attribut
+     * leer) wird die bestehende Anordnung nur übernommen — alte Umschaltungen
+     * repariert DirectionArchive().
+     */
+    private function SyncInvertLayout(): void
+    {
+        $want = $this->ReadPropertyBoolean('PowerInvert') ? 'on' : 'off';
+        $had = $this->ReadAttributeString('InvertLayout');
+        if ($had === $want) {
+            return;
+        }
+        $this->WriteAttributeString('InvertLayout', $want);
+        if ($had === '') {
+            return;
+        }
+        $done = [];
+        foreach ($this->EnergyPairs() as [$imp, $exp]) {
+            $this->SwapIdentPair($imp, $exp);
+            $done[] = '#' . $imp . ' ↔ #' . $exp;
+        }
+        if ($done) {
+            IPS_LogMessage('MeterHub', IPS_GetName($this->InstanceID) . ': „Bezug/Einspeisung vertauscht" ' . ($want === 'on' ? 'eingeschaltet' : 'ausgeschaltet')
+                . ' — die Energiezähler-Variablen haben ihre Rolle getauscht (' . implode(', ', $done) . '). Jede zählt ohne Sprung weiter, die Bezeichnungen passen zur neuen Richtung. Skripte mit fest eingetragenen Variablen-IDs bitte prüfen.');
+        }
+    }
+
+    public function CheckDirectionArchive(int $Days): string
+    {
+        return $this->DirectionArchive($Days, false);
+    }
+
+    public function RepairDirectionArchive(int $Days): string
+    {
+        return $this->DirectionArchive($Days, true);
+    }
+
+    /**
+     * Archiv in sich stimmig machen, Altfälle vor 0.27.0:
+     * Energie — jede Variable eines Paars wird wieder eine durchgehende
+     * Zählerreihe (RetrackStep erkennt die Kreuzsprünge). Reicht der
+     * vertauschte Abschnitt bis heute, tauschen die Variablen zusätzlich ihre
+     * Rolle, damit sie ohne Sprung weiterzählen.
+     * Leistung — nur wenn die Energie schon stimmt: je Viertelstunde Richtung
+     * aus Bezug − Einspeisung gegen das Vorzeichen der archivierten Leistung,
+     * gegenläufige Abschnitte werden gedreht (Kanten per ChangePoint).
+     * Ob die Richtung HEUTE stimmt, sagt GetDiagnostics() — nicht diese
+     * Funktion. Speicherfest: alles tageweise.
+     */
+    private function DirectionArchive(int $days, bool $apply): string
+    {
+        $acs = IPS_GetInstanceListByModuleID('{43192F0B-135B-4CE7-A0A7-1475603F3060}');
+        if (count($acs) === 0) {
+            return '❌ Kein Archiv-Modul (Archive Control) gefunden.';
+        }
+        $ac = $acs[0];
+        $days = max(1, min(120, $days));
+        // Die letzten 10 Minuten bleiben außen vor: frische Werte liegen evtl.
+        // noch im Schreibpuffer des Archivs, dahinter lehnt AC_AddLoggedValues
+        // jedes Nachtragen ab (live gesehen am Solarpark, 12.09.2026).
+        $to = intdiv(time() - 600, 900) * 900;
+        $from = $to - $days * 86400;
+        $fmt = fn($t) => date('d.m. H:i', $t);
+        $lines = [$apply ? '✅ Richtung im Archiv korrigiert (' . $days . ' Tage):' : '🔎 Probelauf, nichts geändert (' . $days . ' Tage):'];
+        $energyMoved = 0;
+        $todo = false;
+        $changed = false;
+        foreach ($this->EnergyPairs() as [$a, $b]) {
+            if (!AC_GetLoggingStatus($ac, $a) || !AC_GetLoggingStatus($ac, $b)) {
+                continue;
+            }
+            $head = IPS_GetName($a) . ' (#' . $a . ') / ' . IPS_GetName($b) . ' (#' . $b . ')';
+            $dry = $this->RetrackPair($ac, $a, $b, $from, $to, false);
+            if ($dry['moved'] === 0) {
+                $lines[] = $head . ': durchgehend, nichts vertauscht.';
+                continue;
+            }
+            $lines[] = $head . ':';
+            foreach (self::CrossWindows($dry['toggles'], $to) as [$wa, $wb, $open]) {
+                $lines[] = '   • vertauscht ' . $fmt($wa) . ' – ' . ($open ? 'heute' : $fmt($wb));
+            }
+            // Auch ein unklares Paar hält den Leistungsabgleich an — der
+            // braucht Zählerstände ohne Kreuzsprünge.
+            $energyMoved += $dry['moved'];
+            if ($dry['on'][0] === $dry['on'][1]) {
+                $lines[] = '   ⚠️ Nur eine der beiden Variablen hat die Seite gewechselt — unklar, wird nicht korrigiert.';
+                continue;
+            }
+            $swapEnd = $dry['on'][0] === 1;
+            if (!$apply) {
+                $todo = true;
+                $lines[] = '   • ' . number_format($dry['moved'], 0, ',', '.') . ' Werte würden zwischen den beiden Variablen getauscht.';
+                if ($swapEnd) {
+                    $lines[] = '   • Der Abschnitt reicht bis heute — zusätzlich tauschen die beiden Variablen ihre Rolle (Name/Ident), damit beide ohne Sprung weiterzählen. Wurde der Schalter zuletzt NICHT umgestellt, liegt der Anfang vermutlich vor dem Prüfzeitraum: Zeitraum vergrößern und erneut prüfen.';
+                }
+                continue;
+            }
+            $files = [];
+            foreach ([$a, $b] as $vid) {
+                $f = $this->BackupSeries($ac, $vid, $from, time(), 'energie');
+                if ($f === null) {
+                    $lines[] = '   ❌ Sicherung fehlgeschlagen — nichts geändert.';
+                    continue 2;
+                }
+                $files[] = $f;
+            }
+            $end = $to;
+            if ($swapEnd) {
+                // Erst die Rolle tauschen, dann umschreiben: ab jetzt schreibt
+                // der Lesezyklus schon richtig, umgeschrieben wird nur davor.
+                $va = (float)GetValue($a);
+                $vb = (float)GetValue($b);
+                $this->SwapIdentPair($a, $b);
+                SetValueFloat($a, $vb);
+                SetValueFloat($b, $va);
+                $end = time() - 1;
+            }
+            $res = $this->RetrackPair($ac, $a, $b, $from, $end, true);
+            if ($res['error'] !== null) {
+                $lines[] = '   ❌ ' . $res['error'] . ' Sicherung: ' . implode(', ', $files);
+                continue;
+            }
+            AC_ReAggregateVariable($ac, $a);
+            AC_ReAggregateVariable($ac, $b);
+            $changed = true;
+            $lines[] = '   • ' . number_format($res['moved'], 0, ',', '.') . ' Werte zwischen den beiden Variablen getauscht' . ($swapEnd ? ', Rolle (Name/Ident) getauscht' : '') . '.';
+            $lines[] = '   • Sicherung im Symcon-Verzeichnis: ' . implode(', ', $files);
+        }
+
+        $pvid = $this->FindVarByIdent('power_total');
+        $ivid = $this->FindVarByIdent('energy_import');
+        $evid = $this->FindVarByIdent('energy_export');
+        if (!$pvid || !$ivid || !$evid || !AC_GetLoggingStatus($ac, $pvid) || !AC_GetLoggingStatus($ac, $ivid) || !AC_GetLoggingStatus($ac, $evid)) {
+            $lines[] = 'Leistung: kein Abgleich möglich (braucht die archivierte Gesamtleistung und beide Energiezähler).';
+        } elseif ($energyMoved > 0) {
+            $lines[] = 'Leistung (#' . $pvid . '): wird abgeglichen, sobald die Energie stimmt — ' . ($apply ? 'bitte jetzt noch einmal „Prüfen" drücken.' : 'erst „Korrigieren", dann erneut „Prüfen".');
+        } else {
+            $pw = $this->PowerMismatch($ac, $pvid, $ivid, $evid, $from, $to);
+            if (!$pw['windows']) {
+                $lines[] = 'Leistung (#' . $pvid . '): passt durchgehend zur Richtung der Energiezähler (' . $pw['judged'] . ' auswertbare Viertelstunden).';
+            } else {
+                $lines[] = 'Leistung (#' . $pvid . '): gegenläufig zur Energie —';
+                foreach ($pw['windows'] as $k => [$wa, $wb, $n, $open]) {
+                    $line = '   • ' . $fmt($wa) . ' – ' . ($open ? 'heute' : $fmt($wb)) . ' (' . number_format($n, 0, ',', '.') . ' Werte)';
+                    if ($open) {
+                        $lines[] = $line . ' — reicht bis heute und bleibt: zuerst die Richtungsprüfung beim Schalter „Bezug/Einspeisung vertauscht" ansehen.';
+                        continue;
+                    }
+                    if (!$apply) {
+                        $todo = true;
+                        $lines[] = $line . ' würde gedreht.';
+                        continue;
+                    }
+                    $f = $this->BackupSeries($ac, $pvid, $wa, $wb, 'leistung' . $k);
+                    if ($f === null) {
+                        $lines[] = $line . ' — ❌ Sicherung fehlgeschlagen, nicht gedreht.';
+                        continue;
+                    }
+                    $err = $this->FlipPowerWindow($ac, $pvid, $wa, $wb);
+                    $lines[] = $line . ($err === null ? ' gedreht. Sicherung: ' . $f : ' — ❌ ' . $err . ' Sicherung: ' . $f);
+                    $changed = $changed || $err === null;
+                }
+                if ($apply) {
+                    AC_ReAggregateVariable($ac, $pvid);
+                }
+            }
+        }
+        if (!$apply) {
+            $lines[] = $todo ? '→ „Korrigieren" führt genau das aus und sichert vorher (JSON-Datei im Symcon-Verzeichnis).' : '→ Nichts zu korrigieren.';
+        } elseif ($changed) {
+            IPS_LogMessage('MeterHub', IPS_GetName($this->InstanceID) . ': Richtung im Archiv korrigiert — ' . str_replace("\n", ' | ', implode("\n", $lines)));
+        }
+        return implode("\n", $lines);
+    }
+
+    /**
+     * Ein Zählerpaar tageweise durch RetrackStep schicken; mit $apply jeden
+     * Tag mit getauschten Werten sofort umschreiben. Rückgabe ['moved' =>
+     * Anzahl, 'toggles' => [[ts, Variable 0|1, Spur], …], 'on' => Endzustand,
+     * 'error' => Text|null].
+     */
+    private function RetrackPair(int $ac, int $a, int $b, int $from, int $to, bool $apply): array
+    {
+        $state = ['lvl' => [$this->LastValidBefore($ac, $a, $from), $this->LastValidBefore($ac, $b, $from)], 'on' => [0, 1], 'x' => []];
+        $moved = 0;
+        for ($t = $from; $t < $to; $t += 86400) {
+            $t2 = min($to, $t + 86400) - 1;
+            $rows = [];
+            foreach ([$a, $b] as $k => $vid) {
+                foreach ($this->RangePoints($ac, $vid, $t, $t2) as [$ts, $v]) {
+                    $rows[] = [$ts, $v, $k];
+                }
+            }
+            usort($rows, fn($x, $y) => ($x[0] <=> $y[0]) ?: ($x[2] <=> $y[2]));
+            [$state, $assign] = self::RetrackStep($state, $rows);
+            $n = 0;
+            foreach ($assign as $r) {
+                if ($r[2] !== $r[3]) {
+                    $n++;
+                }
+            }
+            $moved += $n;
+            if ($apply && $n > 0) {
+                $new = [[], []];
+                $orig = [[], []];
+                foreach ($assign as [$ts, $v, $fromVar, $toVar]) {
+                    $new[$toVar][$ts] = $v;
+                    $orig[$fromVar][$ts] = $v;
+                }
+                $err = $this->RewriteDay($ac, [$a, $b], $t, $t2, $new, $orig);
+                if ($err !== null) {
+                    return ['moved' => $moved, 'toggles' => $state['x'], 'on' => $state['on'], 'error' => $err];
+                }
+            }
+            unset($rows, $assign);
+        }
+        return ['moved' => $moved, 'toggles' => $state['x'], 'on' => $state['on'], 'error' => null];
+    }
+
+    /**
+     * Zeilen eines Zählerpaars ihrer Spur zuordnen (frei von Symcon-Aufrufen,
+     * Prüfstand). $rows aufsteigend [[ts, Wert, 0|1], …] — 0 = erste, 1 =
+     * zweite Variable; Spur 0 ist die Zählerreihe, die Variable 0 zu Beginn
+     * trug. $state: 'lvl' = letzter Stand je Spur, 'on' = Spur, die jede
+     * Variable gerade trägt, 'x' = Wechsel [ts, Variable, neue Spur].
+     * Eine Variable wechselt die Spur nur, wenn ihr Wert auf den Stand der
+     * anderen Spur springt (±1 %), der Sprung mindestens die halbe
+     * Spurdistanz ist und die Spuren deutlich getrennt liegen (≥ 5 %). Ein
+     * Einheitenwechsel (Wh→kWh, Solarpark 09/2026) oder ein Zählertausch ist
+     * so kein Wechsel. Nullwerte bleiben, wo sie sind. Rückgabe [$state,
+     * [[ts, Wert, von Variable, zu Variable], …]].
+     */
+    private static function RetrackStep(array $state, array $rows): array
+    {
+        $assign = [];
+        foreach ($rows as [$ts, $v, $var]) {
+            if (!is_finite($v) || $v <= 0) {
+                $assign[] = [$ts, $v, $var, $var];
+                continue;
+            }
+            $own = $state['on'][$var];
+            $oth = 1 - $own;
+            $lo = $state['lvl'][$own];
+            $lt = $state['lvl'][$oth];
+            if ($lo !== null && $lt !== null) {
+                $sep = abs($lo - $lt);
+                if ($sep >= 0.05 * max($lo, $lt) && abs($v - $lt) <= 0.01 * $lt && abs($v - $lo) >= 0.5 * $sep) {
+                    $state['on'][$var] = $oth;
+                    $state['x'][] = [$ts, $var, $oth];
+                    $own = $oth;
+                }
+            }
+            $state['lvl'][$own] = $v;
+            $assign[] = [$ts, $v, $var, $own];
+        }
+        return [$state, $assign];
+    }
+
+    /** Vertauschte Abschnitte aus den Wechseln: [[von, bis, reicht bis heute], …]. */
+    private static function CrossWindows(array $toggles, int $to): array
+    {
+        $use = array_values(array_filter($toggles, fn($x) => $x[1] === 0));
+        $crossed = 1;
+        if (!$use) {
+            $use = array_values(array_filter($toggles, fn($x) => $x[1] === 1));
+            $crossed = 0;
+        }
+        $win = [];
+        $open = null;
+        foreach ($use as [$ts, $var, $track]) {
+            if ($track === $crossed && $open === null) {
+                $open = $ts;
+            } elseif ($track !== $crossed && $open !== null) {
+                $win[] = [$open, $ts, false];
+                $open = null;
+            }
+        }
+        if ($open !== null) {
+            $win[] = [$open, $to, true];
+        }
+        return $win;
+    }
+
+    /**
+     * Gegenläufige Leistung finden: je Viertelstunde Bezug − Einspeisung aus
+     * den Zählerständen gegen den Mittelwert der archivierten Leistung (beide
+     * „+ = Bezug"). Rückgabe ['windows' => [[von, bis, Anzahl Werte, reicht
+     * bis heute], …], 'judged' => auswertbare Viertelstunden].
+     */
+    private function PowerMismatch(int $ac, int $pvid, int $ivid, int $evid, int $from, int $to): array
+    {
+        $toW = $this->ReadPropertyBoolean('EnergyUnitWh') ? 4.0 : 4000.0; // Zunahme je Viertelstunde → W
+        $cp = $this->LastValueBefore($ac, $pvid, $from);
+        $ci = $this->LastValidBefore($ac, $ivid, $from);
+        $ce = $this->LastValidBefore($ac, $evid, $from);
+        $verdicts = [];
+        $nets = [];
+        $judged = 0;
+        for ($t = $from; $t < $to; $t += 86400) {
+            $t2 = min($to, $t + 86400);
+            $pp = $this->RangePoints($ac, $pvid, $t, $t2 - 1);
+            $pi = $this->RangePoints($ac, $ivid, $t, $t2 - 1);
+            $pe = $this->RangePoints($ac, $evid, $t, $t2 - 1);
+            $pm = self::SegmentMeans($pp, $cp, $t, $t2, 900);
+            $hi = self::SampleHold($pi, $ci, $t, $t2, 900);
+            $he = self::SampleHold($pe, $ce, $t, $t2, 900);
+            for ($q = $t; $q + 900 <= $t2; $q += 900) {
+                $verdict = 0;
+                if (isset($pm[$q]) && $hi[$q] !== null && $hi[$q + 900] !== null && $he[$q] !== null && $he[$q + 900] !== null) {
+                    $dI = $hi[$q + 900] - $hi[$q];
+                    $dE = $he[$q + 900] - $he[$q];
+                    if ($dI >= 0 && $dE >= 0) {
+                        $nets[$q] = ($dI - $dE) * $toW;
+                        $verdict = self::BucketVerdict($nets[$q], $pm[$q], self::DIR_MIN_W);
+                    }
+                }
+                if ($verdict !== 0) {
+                    $judged++;
+                }
+                $verdicts[] = [$q, $verdict];
+            }
+            if ($pp) {
+                $cp = $pp[count($pp) - 1][1];
+            }
+            $ci = $hi[$t2] ?? $ci;
+            $ce = $he[$t2] ?? $ce;
+            unset($pp, $pi, $pe, $pm, $hi, $he);
+        }
+        $windows = [];
+        foreach (self::FindMismatchWindows($verdicts, 900, 7200, 2) as [$wa, $wb]) {
+            $open = $wb >= $to;
+            $sa = $this->RefineEdge($ac, $pvid, $nets, $wa, true);
+            $sb = $open ? $wb : $this->RefineEdge($ac, $pvid, $nets, $wb, false);
+            $windows[] = [$sa, $sb, $this->CountRows($ac, $pvid, $sa, $sb - 1), $open];
+        }
+        return ['windows' => $windows, 'judged' => $judged];
+    }
+
+    /** Viertelstunde einstufen: +1 passt, −1 gegenläufig, 0 zu wenig Leistung für eine Aussage. */
+    private static function BucketVerdict(float $netW, float $powerW, float $minW): int
+    {
+        if (abs($netW) < $minW || abs($powerW) < $minW) {
+            return 0;
+        }
+        return ($netW > 0) === ($powerW > 0) ? 1 : -1;
+    }
+
+    /**
+     * Zusammenhängende gegenläufige Viertelstunden ([[Beginn, Urteil], …]
+     * aufsteigend) zu Abschnitten [[von, bis], …]. Unklare Stücke bis $bridge
+     * Sekunden werden überbrückt, eine passende Viertelstunde beendet den
+     * Abschnitt. Mindestens $minBuckets gegenläufige Viertelstunden — einzelne
+     * Ausreißer sind kein Umschalten.
+     */
+    private static function FindMismatchWindows(array $verdicts, int $bucket, int $bridge, int $minBuckets): array
+    {
+        $out = [];
+        $cur = null;
+        $close = function () use (&$cur, &$out, $minBuckets) {
+            if ($cur !== null && $cur[2] >= $minBuckets) {
+                $out[] = [$cur[0], $cur[1]];
+            }
+            $cur = null;
+        };
+        foreach ($verdicts as [$q, $v]) {
+            if ($v === -1) {
+                if ($cur !== null && $q - $cur[1] > $bridge) {
+                    $close();
+                }
+                if ($cur === null) {
+                    $cur = [$q, $q + $bucket, 1];
+                } else {
+                    $cur[1] = $q + $bucket;
+                    $cur[2]++;
+                }
+            } elseif ($v === 1) {
+                $close();
+            }
+        }
+        $close();
+        return $out;
+    }
+
+    /** Minutengenaue Kante eines gegenläufigen Abschnitts aus den Leistungswerten ±15 min um die Viertelstunden-Kante. */
+    private function RefineEdge(int $ac, int $pvid, array $nets, int $edge, bool $start): int
+    {
+        $pts = [];
+        foreach ($this->RangePoints($ac, $pvid, $edge - 900, $edge + 899) as [$ts, $p]) {
+            $net = $nets[intdiv($ts, 900) * 900] ?? null;
+            if ($net === null || abs($net) < self::DIR_MIN_W || abs($p) < self::DIR_MIN_W) {
+                continue;
+            }
+            $pts[] = [$ts, ($net > 0) !== ($p > 0)];
+        }
+        return self::ChangePoint($pts, $start) ?? $edge;
+    }
+
+    /**
+     * Umschaltzeitpunkt: $pts aufsteigend [[ts, gegenläufig?], …]. Am Anfang
+     * eines Abschnitts (vorher passend, danach gegenläufig) bzw. am Ende
+     * (umgekehrt) der Zeitpunkt, der die meisten Werte richtig einteilt.
+     * Rückgabe: erster Zeitstempel der zweiten Hälfte, null ohne Werte.
+     */
+    private static function ChangePoint(array $pts, bool $startEdge): ?int
+    {
+        $n = count($pts);
+        if ($n === 0) {
+            return null;
+        }
+        $total = 0;
+        foreach ($pts as $p) {
+            $total += $p[1] ? 1 : 0;
+        }
+        $best = -1;
+        $bestK = 0;
+        $flipBefore = 0;
+        for ($k = 0; $k <= $n; $k++) {
+            $afterFlip = $total - $flipBefore;
+            $score = $startEdge
+                ? ($k - $flipBefore) + $afterFlip
+                : $flipBefore + (($n - $k) - $afterFlip);
+            if ($score > $best) {
+                $best = $score;
+                $bestK = $k;
+            }
+            if ($k < $n && $pts[$k][1]) {
+                $flipBefore++;
+            }
+        }
+        return $bestK < $n ? $pts[$bestK][0] : $pts[$n - 1][0] + 1;
+    }
+
+    /** Leistung in [von, bis) drehen, tageweise mit Wiederherstellung bei Fehlern. */
+    private function FlipPowerWindow(int $ac, int $pvid, int $wa, int $wb): ?string
+    {
+        for ($t = $wa; $t < $wb; $t += 86400) {
+            $t2 = min($wb - 1, $t + 86399);
+            $orig = [];
+            $new = [];
+            foreach ($this->RangePoints($ac, $pvid, $t, $t2) as [$ts, $v]) {
+                $orig[$ts] = $v;
+                $new[$ts] = -$v;
+            }
+            if (!$orig) {
+                continue;
+            }
+            $err = $this->RewriteDay($ac, [$pvid], $t, $t2, [$new], [$orig]);
+            if ($err !== null) {
+                return $err;
+            }
+        }
+        return null;
+    }
+
+    /** Einen Tag mehrerer Variablen ersetzen; lehnt das Archiv ab, wird der Tag im Originalzustand wiederhergestellt. */
+    private function RewriteDay(int $ac, array $vids, int $t, int $t2, array $new, array $orig): ?string
+    {
+        foreach ($vids as $vid) {
+            AC_DeleteVariableData($ac, $vid, $t, $t2);
+        }
+        foreach ($vids as $k => $vid) {
+            if ($this->AddRowsRetry($ac, $vid, $new[$k])) {
+                continue;
+            }
+            foreach ($vids as $vid2) {
+                AC_DeleteVariableData($ac, $vid2, $t, $t2);
+            }
+            $ok = true;
+            foreach ($vids as $k2 => $vid2) {
+                $ok = $this->AddRowsRetry($ac, $vid2, $orig[$k2]) && $ok;
+            }
+            return 'Das Archiv hat das Nachtragen für den ' . date('d.m.', $t) . ' abgelehnt'
+                . ($ok ? ' — dieser Tag ist unverändert wiederhergestellt, spätere Tage sind nicht bearbeitet.' : ' — auch die Wiederherstellung schlug fehl, bitte die Sicherungsdatei verwenden.');
+        }
+        return null;
+    }
+
+    /**
+     * Werte [ts => Wert] ins Archiv nachtragen. Liegen gerade geschriebene
+     * Werte noch im Schreibpuffer, lehnt Symcon neuere Zeitstempel ab
+     * („Kann Daten mit einem neueren Zeitstempel … nicht hinzufügen") —
+     * dann kurz warten und erneut versuchen.
+     */
+    private function AddRowsRetry(int $ac, int $vid, array $byTs): bool
+    {
+        if (!$byTs) {
+            return true;
+        }
+        ksort($byTs);
+        $rows = [];
+        foreach ($byTs as $ts => $v) {
+            $rows[] = ['TimeStamp' => (int)$ts, 'Value' => (float)$v];
+        }
+        for ($try = 0; $try < 10; $try++) {
+            if (@AC_AddLoggedValues($ac, $vid, $rows)) {
+                return true;
+            }
+            usleep(2000000);
+        }
+        return false;
+    }
+
+    /** Archivwerte [von, bis] als JSON ins Symcon-Verzeichnis sichern (tageweise gestreamt). Rückgabe Dateiname oder null. */
+    private function BackupSeries(int $ac, int $vid, int $from, int $to, string $tag): ?string
+    {
+        $file = IPS_GetKernelDir() . 'meterhub_sicherung_' . $vid . '_' . $tag . '_' . date('Ymd_His') . '.json';
+        $fh = @fopen($file, 'w');
+        if ($fh === false) {
+            return null;
+        }
+        fwrite($fh, '[');
+        $first = true;
+        for ($t = $from; $t <= $to; $t += 86400) {
+            foreach ($this->RangePoints($ac, $vid, $t, min($to, $t + 86399)) as $p) {
+                fwrite($fh, ($first ? '' : ',') . json_encode($p));
+                $first = false;
+            }
+        }
+        fwrite($fh, ']');
+        fclose($fh);
+        return basename($file);
+    }
+
+    /** Archivwerte [von, bis] (höchstens ein Tag, Grenze 50 000 Zeilen) aufsteigend als [[ts, Wert], …]. */
+    private function RangePoints(int $ac, int $vid, int $from, int $to): array
+    {
+        $out = [];
+        foreach (array_reverse(AC_GetLoggedValues($ac, $vid, $from, $to, 0)) as $r) {
+            $out[] = [(int)$r['TimeStamp'], (float)$r['Value']];
+        }
+        return $out;
+    }
+
+    private function CountRows(int $ac, int $vid, int $from, int $to): int
+    {
+        $n = 0;
+        for ($t = $from; $t <= $to; $t += 86400) {
+            $n += count(AC_GetLoggedValues($ac, $vid, $t, min($to, $t + 86399), 0));
+        }
+        return $n;
+    }
+
+    /** Letzter gültiger Zählerstand (> 0) vor $t, null wenn keiner. */
+    private function LastValidBefore(int $ac, int $vid, int $t): ?float
+    {
+        foreach (AC_GetLoggedValues($ac, $vid, 0, $t - 1, 20) as $r) {
+            $v = (float)$r['Value'];
+            if (is_finite($v) && $v > 0) {
+                return $v;
+            }
+        }
+        return null;
+    }
+
+    /** Letzter archivierter Wert vor $t (auch negativ), null wenn keiner. */
+    private function LastValueBefore(int $ac, int $vid, int $t): ?float
+    {
+        $r = AC_GetLoggedValues($ac, $vid, 0, $t - 1, 1);
+        return $r ? (float)$r[0]['Value'] : null;
+    }
+
+    /**
+     * Zeitgewichtete Mittelwerte je Abschnitt [$from, $to) mit Schrittweite
+     * $step: jeder Wert gilt bis zum nächsten, $carry ist der Wert vor $from.
+     * Rückgabe [Abschnittsbeginn => Mittelwert] (nur Abschnitte mit Wert).
+     */
+    private static function SegmentMeans(array $pts, ?float $carry, int $from, int $to, int $step): array
+    {
+        $acc = [];
+        $t = $from;
+        $v = $carry;
+        $pts[] = [$to, null];
+        foreach ($pts as [$ts, $nv]) {
+            $ts = min(max((int)$ts, $from), $to);
+            if ($v !== null && is_finite($v)) {
+                $a = $t;
+                while ($a < $ts) {
+                    $b0 = $from + intdiv($a - $from, $step) * $step;
+                    $b = min($ts, $b0 + $step);
+                    $acc[$b0][0] = ($acc[$b0][0] ?? 0.0) + $v * ($b - $a);
+                    $acc[$b0][1] = ($acc[$b0][1] ?? 0) + ($b - $a);
+                    $a = $b;
+                }
+            }
+            if ($ts > $t) {
+                $t = $ts;
+            }
+            if ($nv !== null) {
+                $v = (float)$nv;
+            }
+        }
+        $out = [];
+        foreach ($acc as $b0 => [$s, $w]) {
+            if ($w > 0) {
+                $out[$b0] = $s / $w;
+            }
+        }
+        return $out;
+    }
+
+    /** Zählerstand an den Grenzen $from, $from+$step, …, $to (letzter gültiger Wert davor, $carry vor $from). */
+    private static function SampleHold(array $pts, ?float $carry, int $from, int $to, int $step): array
+    {
+        $out = [];
+        $i = 0;
+        $n = count($pts);
+        $v = $carry;
+        for ($q = $from; $q <= $to; $q += $step) {
+            while ($i < $n && $pts[$i][0] <= $q) {
+                if (is_finite($pts[$i][1]) && $pts[$i][1] > 0) {
+                    $v = (float)$pts[$i][1];
+                }
+                $i++;
+            }
+            $out[$q] = $v;
+        }
+        return $out;
+    }
+
+    /**
+     * Diagnose-Vertrag 1.0 (0.27.0, Anregung Dashboard 12.09.2026, Format wie
+     * IHUBMON_GetDiagnostics): MeterHub bewertet, der Konsument zeigt nur an.
+     * Je Netz-Zuordnung ein Eintrag `meter_direction` — läuft die Leistung
+     * wie eine zweite Quelle? Vergleichsquellen der Reihe nach: andere
+     * MeterHub-Netzzähler (gleichläufig), InverterHub-Netzmessung (dort
+     * „+ = Einspeisung", also gegenläufig), hilfsweise die PV-Erzeugung
+     * (Netzleistung muss fallen, wenn PV steigt — nur Hinweis). Ergebnis
+     * 30 min zwischengespeichert; ein neuer Befund landet einmal im Log.
+     */
+    public function GetDiagnostics(): array
+    {
+        $cache = json_decode($this->ReadAttributeString('DirectionDiag'), true);
+        if (is_array($cache) && ($cache['checkedAt'] ?? 0) > time() - 1800) {
+            return $cache;
+        }
+        $fresh = $this->ComputeDiagnostics();
+        $old = [];
+        foreach ((is_array($cache) ? ($cache['entries'] ?? []) : []) as $e) {
+            $old[$e['slot'] ?? ''] = $e['level'] ?? null;
+        }
+        foreach ($fresh['entries'] as $e) {
+            if (in_array($e['level'], ['auffaellig', 'kritisch'], true) && ($old[$e['slot']] ?? null) !== $e['level']) {
+                IPS_LogMessage('MeterHub', IPS_GetName($this->InstanceID) . ': ' . $e['label'] . ' — ' . $e['reason']);
+            }
+        }
+        $this->WriteAttributeString('DirectionDiag', (string)json_encode($fresh));
+        return $fresh;
+    }
+
+    private function ComputeDiagnostics(): array
+    {
+        $now = time();
+        $out = ['contractVersion' => '1.0', 'instanceID' => $this->InstanceID, 'checkedAt' => $now, 'entries' => []];
+        $acs = IPS_GetInstanceListByModuleID('{43192F0B-135B-4CE7-A0A7-1475603F3060}');
+        if (count($acs) === 0) {
+            return $out;
+        }
+        $ac = $acs[0];
+        $from = intdiv($now - 172800, 300) * 300;
+        $refs = null;
+        foreach ($this->FunctionAssignments() as $a) {
+            if ($a['key'] !== 'grid') {
+                continue;
+            }
+            $pid = (int)$this->FindVarByIdent($a['power']);
+            if (!$pid) {
+                continue;
+            }
+            $entry = [
+                'type' => 'meter_direction', 'slot' => $a['slot'], 'label' => 'Richtung ' . $a['label'],
+                'level' => null, 'threshold' => null, 'reason' => '',
+                'powerID' => $pid, 'referencePowerID' => 0, 'referenceLabel' => '', 'relation' => '',
+                'correlation' => null, 'samples' => 0, 'checkedAt' => $now,
+            ];
+            if (!AC_GetLoggingStatus($ac, $pid)) {
+                $entry['reason'] = 'Die Leistung wird nicht archiviert — keine Richtungsprüfung möglich.';
+                $out['entries'][] = $entry;
+                continue;
+            }
+            $own = self::SegmentMeans($this->LoadArchivePoints($ac, $pid, $from, $now), $this->LastValueBefore($ac, $pid, $from), $from, $now, 300);
+            $refs ??= $this->DirectionReferences();
+            foreach ($refs as [$rid, $rlabel, $relation]) {
+                if ($rid === $pid || !IPS_VariableExists($rid) || !AC_GetLoggingStatus($ac, $rid)) {
+                    continue;
+                }
+                $ref = self::SegmentMeans($this->LoadArchivePoints($ac, $rid, $from, $now), $this->LastValueBefore($ac, $rid, $from), $from, $now, 300);
+                [$c, $n] = $relation === 'pv' ? self::PearsonPairs($own, $ref, 300.0) : self::CosinePairs($own, $ref, self::DIR_MIN_W);
+                if ($n < 24) {
+                    continue; // weniger als 2 h gemeinsame Messwerte — nächste Quelle
+                }
+                $rel = $relation === 'same' ? $c : -$c;
+                [$level, $th] = self::DirectionLevel($rel, $relation !== 'pv');
+                $pct = (int)round($rel * 100);
+                if ($relation === 'pv') {
+                    $reason = $level === 'normal' ? 'Die Netzleistung sinkt, wenn die PV-Erzeugung (' . $rlabel . ') steigt — Richtung plausibel.'
+                        : ($level === null ? 'Keine eindeutige Aussage aus dem Vergleich mit der PV-Erzeugung (' . $rlabel . ').'
+                        : 'Die Netzleistung steigt mit der PV-Erzeugung (' . $rlabel . ') — das deutet auf eine verkehrte Richtung hin. Schalter „Bezug/Einspeisung vertauscht" prüfen. Nur ein Hinweis: auch Verbraucher, die sich nach der PV richten, können so wirken.');
+                } else {
+                    $reason = $level === 'normal' ? 'Richtung passt zu ' . $rlabel . ' (Übereinstimmung ' . $pct . ' % über ' . $n . ' Fünf-Minuten-Werte der letzten 48 h).'
+                        : ($level === null ? 'Keine eindeutige Aussage im Vergleich mit ' . $rlabel . ' (Übereinstimmung ' . $pct . ' %).'
+                        : 'Die Leistung läuft gegenläufig zu ' . $rlabel . ' (Übereinstimmung ' . $pct . ' %) — der Zähler scheint verkehrt herum zu messen. Schalter „Bezug/Einspeisung vertauscht" prüfen; möglich ist auch, dass die Vergleichsquelle verkehrt ist.');
+                }
+                $entry = array_merge($entry, [
+                    'level' => $level, 'threshold' => $th, 'reason' => $reason,
+                    'referencePowerID' => $rid, 'referenceLabel' => $rlabel, 'relation' => $relation,
+                    'correlation' => round($rel, 2), 'samples' => $n,
+                ]);
+                break;
+            }
+            if ($entry['reason'] === '') {
+                $entry['reason'] = 'Keine Vergleichsquelle mit genug Messwerten in den letzten 48 h (anderer Netzzähler, Wechselrichter mit Netzmessung oder PV-Erzeugung im Verbund).';
+            }
+            $out['entries'][] = $entry;
+        }
+        return $out;
+    }
+
+    /** Vergleichsquellen [[Leistungs-ID, Bezeichnung, 'same'|'opposite'|'pv'], …] in der Reihenfolge ihrer Aussagekraft. */
+    private function DirectionReferences(): array
+    {
+        $refs = [];
+        if (function_exists('MHUB_GetFunctions')) {
+            foreach (IPS_GetInstanceListByModuleID('{BAB8E05C-9150-43B9-9F2B-E5215FA54F0A}') as $iid) {
+                if ($iid === $this->InstanceID || IPS_GetInstance($iid)['InstanceStatus'] !== 102) {
+                    continue;
+                }
+                $f = json_decode((string)@MHUB_GetFunctions($iid), true);
+                if (!is_array($f) || ($f['latency'] ?? '') !== 'realtime') {
+                    continue;
+                }
+                foreach ($f['assignments'] ?? [] as $as) {
+                    if (($as['function'] ?? '') === 'grid' && (int)($as['powerID'] ?? 0) > 0) {
+                        $refs[] = [(int)$as['powerID'], IPS_GetName($iid), 'same'];
+                    }
+                }
+            }
+        }
+        $ihub = [];
+        if (function_exists('IHUB_GetFunctions') && @IPS_ModuleExists('{BBE2C593-1A91-426D-A714-29A9C7E87589}')) {
+            foreach (IPS_GetInstanceListByModuleID('{BBE2C593-1A91-426D-A714-29A9C7E87589}') as $iid) {
+                $f = @IHUB_GetFunctions($iid);
+                if (is_array($f)) {
+                    $ihub[] = [$iid, $f];
+                }
+            }
+        }
+        foreach ($ihub as [$iid, $f]) {
+            if ((int)($f['gridPowerID'] ?? 0) > 0) {
+                $refs[] = [(int)$f['gridPowerID'], IPS_GetName($iid) . ' (Netzmessung)', 'opposite'];
+            }
+        }
+        foreach ($ihub as [$iid, $f]) {
+            if ((int)($f['pvPowerID'] ?? 0) > 0) {
+                $refs[] = [(int)$f['pvPowerID'], IPS_GetName($iid) . ' (PV-Erzeugung)', 'pv'];
+            }
+        }
+        return $refs;
+    }
+
+    /** Gleichlauf zweier Leistungsreihen [Zeit => W] (Kosinus, vorzeichenempfindlich), nur Paare mit |W| ≥ $minW. Rückgabe [Wert −1…+1, Anzahl]. */
+    private static function CosinePairs(array $a, array $b, float $minW): array
+    {
+        $sab = 0.0;
+        $saa = 0.0;
+        $sbb = 0.0;
+        $n = 0;
+        foreach ($a as $k => $x) {
+            if (!isset($b[$k]) || abs($x) < $minW || abs($b[$k]) < $minW) {
+                continue;
+            }
+            $y = $b[$k];
+            $sab += $x * $y;
+            $saa += $x * $x;
+            $sbb += $y * $y;
+            $n++;
+        }
+        return [($saa > 0 && $sbb > 0) ? $sab / sqrt($saa * $sbb) : 0.0, $n];
+    }
+
+    /** Korrelation (Pearson) Netzleistung ↔ PV-Erzeugung, nur Zeiten mit PV ≥ $minPv. Rückgabe [Wert −1…+1, Anzahl]. */
+    private static function PearsonPairs(array $grid, array $pv, float $minPv): array
+    {
+        $xs = [];
+        $ys = [];
+        foreach ($grid as $k => $x) {
+            if (isset($pv[$k]) && $pv[$k] >= $minPv) {
+                $xs[] = $x;
+                $ys[] = $pv[$k];
+            }
+        }
+        $n = count($xs);
+        if ($n < 2) {
+            return [0.0, $n];
+        }
+        $mx = array_sum($xs) / $n;
+        $my = array_sum($ys) / $n;
+        $sxy = 0.0;
+        $sxx = 0.0;
+        $syy = 0.0;
+        for ($i = 0; $i < $n; $i++) {
+            $dx = $xs[$i] - $mx;
+            $dy = $ys[$i] - $my;
+            $sxy += $dx * $dy;
+            $sxx += $dx * $dx;
+            $syy += $dy * $dy;
+        }
+        return [($sxx > 0 && $syy > 0) ? $sxy / sqrt($sxx * $syy) : 0.0, $n];
+    }
+
+    /** Bewertung aus der Übereinstimmung (+1 passt, −1 gegenläufig). Direkte Netzquelle: kritisch; nur PV-Vergleich: höchstens auffällig. */
+    private static function DirectionLevel(float $rel, bool $direct): array
+    {
+        $th = $direct ? 0.6 : 0.3;
+        if ($rel >= $th) {
+            return ['normal', $th];
+        }
+        if ($rel <= -$th) {
+            return [$direct ? 'kritisch' : 'auffaellig', $th];
+        }
+        return [null, $th];
+    }
+
+    /** Zeile unter dem Schalter „Bezug/Einspeisung vertauscht". */
+    private function DirectionFormText(): string
+    {
+        try {
+            $d = $this->GetDiagnostics();
+        } catch (\Throwable $e) {
+            return '🧭 Richtungsprüfung: gerade nicht möglich (' . $e->getMessage() . ').';
+        }
+        $parts = [];
+        foreach ($d['entries'] ?? [] as $e) {
+            $icon = ['normal' => '✅', 'auffaellig' => '⚠️', 'kritisch' => '❌'][$e['level'] ?? ''] ?? 'ℹ️';
+            $parts[] = '🧭 ' . $e['label'] . ': ' . $icon . ' ' . $e['reason'];
+        }
+        return $parts ? implode("\n", $parts) : '🧭 Richtungsprüfung: nur bei Zählern mit der Funktion „Netzanschluss".';
     }
 
     // -----------------------------------------------------------------------
