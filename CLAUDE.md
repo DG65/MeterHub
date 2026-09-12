@@ -1149,6 +1149,18 @@ Setter (`SetVarEnergyWh()`/`SetVarEnergykWh()`), nicht in einem einzelnen Treibe
 in `.tools/test-powerinvert.php` (eigener, leichtgewichtiger IPSModule-Stub, kein
 Objektbaum/Treiber nötig — nur Property/Attribut/Variablenwerte).
 
+## Modbus: eine Verbindung je Zyklus (0.26.5, 12.09.2026)
+
+`MHUB_ModbusTcpClient` öffnet die TCP-Verbindung bei der ersten Anfrage und hält sie,
+bis MeterHub am Ende von `ReadFast()`/`ReadSlow()`/`TestConnection()` `close()` ruft
+(sonst der Destruktor). Anlass: im Solarpark 2 666 Verbindungen im Wartezustand, 2 333
+davon zu blue'Log .204 (48 Instanzen × jede Anfrage eigene Verbindung). **Regeln für
+künftige Treiber/Änderungen:** Antworten exakt nach MBAP-Länge lesen (nie „bis zu 512
+Byte"), Transaktions-ID prüfen, einmal neu verbinden nur bei weggebrochener Verbindung
+(`lastError` write/eof), nie bei Timeout/Exception. Neuer Transport (z. B. Cloud) ohne
+`close()` ist erlaubt — Aufrufer prüfen `method_exists($mb, 'close')`. Prüfstand
+`.tools/test-modbus-client.php` (echter Server per `proc_open`).
+
 ## Nützliches beim Testen am Live-IPS
 
 - `php_eval` (MCP `ips-automation`) **gibt Rückgabewerte nicht aus**. Zuverlässigster Weg zur

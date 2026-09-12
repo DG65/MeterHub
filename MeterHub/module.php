@@ -46,48 +46,149 @@ class MHUB_ModbusTcpClient
         return $this->modbusRead(0x04, $startReg, $count);
     }
 
+    // -----------------------------------------------------------------------
+    // Eine Verbindung je Lesezyklus (Dietmars Auftrag 12.09.2026). Vorher
+    // öffnete JEDE Anfrage eine eigene TCP-Verbindung und schloss sie sofort
+    // wieder — im Solarpark standen dadurch 2 333 abgebaute Verbindungen zu
+    // einem einzigen blue'Log (.204, 48 Wechselrichter-Instanzen) im
+    // Wartezustand, rund 20 neue pro Sekunde. Genau schnelles Verbinden/
+    // Trennen verkraften blue'Logs nachweislich schlecht (live gemessen
+    // 09.09.2026, siehe MeterHubDiscovery). Jetzt: die erste Anfrage öffnet,
+    // alle weiteren desselben Zyklus nutzen die Verbindung mit, MeterHub
+    // schließt sie am Zyklusende (close(), sonst spätestens der Destruktor).
+    // -----------------------------------------------------------------------
+
+    /** @var resource|null offene Verbindung für die Dauer eines Zyklus */
+    private $sock = null;
+    private $tid = 0;
+    /** Anzahl aufgebauter Verbindungen (Prüfstand/Diagnose). */
+    public $connects = 0;
+    /** Grund des letzten Fehlschlags: 'connect' | 'write' | 'eof' | 'timeout' | 'frame' | '' */
+    public $lastError = '';
+
+    public function close(): void
+    {
+        if ($this->sock) {
+            @fclose($this->sock);
+        }
+        $this->sock = null;
+    }
+
+    public function __destruct()
+    {
+        $this->close();
+    }
+
+    private function connect(): bool
+    {
+        if ($this->sock) {
+            return true;
+        }
+        $s = @fsockopen($this->host, $this->port, $errno, $errstr, 3.0);
+        if ($s === false) {
+            $this->lastError = 'connect';
+            return false;
+        }
+        stream_set_timeout($s, 3);
+        $this->sock = $s;
+        $this->connects++;
+        return true;
+    }
+
+    /**
+     * Anfrage senden, zugehörige Antwort-PDU (ab Funktionscode) liefern oder
+     * null. Ein zweiter Versuch mit frischer Verbindung NUR, wenn eine schon
+     * benutzte Verbindung weggebrochen ist (Gegenstelle hat sie geschlossen)
+     * — nicht bei Zeitüberschreitung (ein stummes Gerät würde sonst doppelt
+     * so lange blockieren) und nicht bei einer Modbus-Exception (die ist eine
+     * gültige Antwort, die Verbindung bleibt nutzbar).
+     */
+    private function transact(string $pdu): ?string
+    {
+        for ($attempt = 0; $attempt < 2; $attempt++) {
+            $reused = $this->sock !== null;
+            if (!$this->connect()) {
+                return null;
+            }
+            $resp = $this->exchange($pdu);
+            if ($resp !== null) {
+                $this->lastError = '';
+                return $resp;
+            }
+            $this->close();
+            if (!$reused || !in_array($this->lastError, ['write', 'eof'], true)) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private function exchange(string $pdu): ?string
+    {
+        $this->tid = ($this->tid % 65535) + 1;
+        $tid = $this->tid;
+        $frame = pack('nnn', $tid, 0, strlen($pdu) + 1) . chr($this->unitId) . $pdu;
+        if (@fwrite($this->sock, $frame) !== strlen($frame)) {
+            $this->lastError = 'write';
+            return null;
+        }
+        $deadline = microtime(true) + 3.0;
+        while (true) {
+            // MBAP: Transaktion(2) Protokoll(2) Länge(2) Unit(1); Länge zählt
+            // Unit + PDU. Exakt so viel lesen — auf einer weiterbenutzten
+            // Verbindung darf nichts von der nächsten Antwort verschluckt werden.
+            $head = $this->readExact(7, $deadline);
+            if ($head === null) {
+                return null;
+            }
+            $h = unpack('ntid/npid/nlen', $head);
+            if ($h['len'] < 2 || $h['len'] > 260) {
+                $this->lastError = 'frame';
+                return null;
+            }
+            $body = $this->readExact($h['len'] - 1, $deadline);
+            if ($body === null) {
+                return null;
+            }
+            if ($h['tid'] === $tid) {
+                return $body;
+            }
+            // Verspätete Antwort einer früheren Anfrage — verwerfen, weiterlesen.
+        }
+    }
+
+    private function readExact(int $n, float $deadline): ?string
+    {
+        $buf = '';
+        while (strlen($buf) < $n) {
+            if (microtime(true) >= $deadline) {
+                $this->lastError = 'timeout';
+                return null;
+            }
+            $chunk = @fread($this->sock, $n - strlen($buf));
+            if ($chunk === false || $chunk === '') {
+                $meta = @stream_get_meta_data($this->sock);
+                $this->lastError = !empty($meta['timed_out']) ? 'timeout' : 'eof';
+                return null;
+            }
+            $buf .= $chunk;
+        }
+        return $buf;
+    }
+
     private function modbusRead($fc, $startReg, $count)
     {
-        $sock = @fsockopen($this->host, $this->port, $errno, $errstr, 3.0);
-        if ($sock === false) {
+        $pdu = $this->transact(pack('Cnn', $fc, $startReg, $count));
+        if ($pdu === null || strlen($pdu) < 2) {
             return null;
         }
-        stream_set_timeout($sock, 3);
-
-        $tid  = mt_rand(1, 65535);
-        $pdu  = pack('Cnn', $fc, $startReg, $count);
-        $mbap = pack('nnn', $tid, 0, strlen($pdu) + 1) . chr($this->unitId);
-
-        fwrite($sock, $mbap . $pdu);
-
-        $response = '';
-        $deadline = microtime(true) + 3.0;
-        while (microtime(true) < $deadline) {
-            $chunk = @fread($sock, 512);
-            if ($chunk === false || $chunk === '') {
-                break;
-            }
-            $response .= $chunk;
-            if (strlen($response) >= 9) {
-                $byteCount = ord($response[8]);
-                if (strlen($response) >= 9 + $byteCount) {
-                    break;
-                }
-            }
-        }
-        fclose($sock);
-
-        if (strlen($response) < 9) {
-            return null;
-        }
-
-        $rfc = ord($response[7]);
+        $rfc = ord($pdu[0]);
         if ($rfc & 0x80 || $rfc !== $fc) {
             return null;
         }
 
-        $byteCount = ord($response[8]);
-        $data      = substr($response, 9, $byteCount);
+        $byteCount = ord($pdu[1]);
+        $data      = substr($pdu, 2, $byteCount);
 
         $regs = [];
         for ($i = 0; $i < $count && ($i * 2 + 1) < strlen($data); $i++) {
@@ -180,41 +281,19 @@ class MHUB_ModbusTcpClient
     // Rückgabe: Modbus-Exception oder Zeitüberschreitung -> false.
     public function writeHolding($startReg, array $regs): bool
     {
-        $sock = @fsockopen($this->host, $this->port, $errno, $errstr, 3.0);
-        if ($sock === false) {
-            return false;
-        }
-        stream_set_timeout($sock, 3);
-
-        $tid     = mt_rand(1, 65535);
         $count   = count($regs);
         $payload = '';
         foreach ($regs as $r) {
             $payload .= pack('n', $r & 0xFFFF);
         }
-        $pdu  = pack('CnnC', 0x10, $startReg, $count, $count * 2) . $payload;
-        $mbap = pack('nnn', $tid, 0, strlen($pdu) + 1) . chr($this->unitId);
-
-        fwrite($sock, $mbap . $pdu);
-
-        $response = '';
-        $deadline = microtime(true) + 3.0;
-        while (microtime(true) < $deadline) {
-            $chunk = @fread($sock, 512);
-            if ($chunk === false || $chunk === '') {
-                break;
-            }
-            $response .= $chunk;
-            if (strlen($response) >= 12) {
-                break; // FC16-Antwort ist fix 12 Byte (MBAP 7 + FC 1 + Startreg 2 + Anzahl 2)
-            }
-        }
-        fclose($sock);
-
-        if (strlen($response) < 8) {
+        // Über dieselbe Zyklus-Verbindung wie die Lesezugriffe. Ein erneutes
+        // Senden nach weggebrochener Verbindung (transact()) ist bei FC16
+        // unkritisch: derselbe Wert wird ein zweites Mal geschrieben.
+        $pdu = $this->transact(pack('CnnC', 0x10, $startReg, $count, $count * 2) . $payload);
+        if ($pdu === null || $pdu === '') {
             return false;
         }
-        $rfc = ord($response[7]);
+        $rfc = ord($pdu[0]);
         return !($rfc & 0x80) && $rfc === 0x10;
     }
 }
@@ -2913,7 +2992,7 @@ class MeterHub extends IPSModule
         $this->RegisterAttributeBoolean('PurposeIntroGone', false);
     }
 
-    private const NEWS_VERSION = '0.26.4';
+    private const NEWS_VERSION = '0.26.5';
     private const FORUM_THREAD_URL = 'https://community.symcon.de/t/PLATZHALTER-meterhub-thread-folgt/00000';
     private const LICENSE_URL = 'https://github.com/DG65/NRGMeterHub/blob/ems-integration/LICENSE';
     private const PAYPAL_URL = 'https://paypal.me/DietmarGureth';
@@ -2952,6 +3031,7 @@ class MeterHub extends IPSModule
             'type' => 'ExpansionPanel', 'name' => 'NewsPanel', 'expanded' => true,
             'caption' => '🆕  Neu in dieser Version',
             'items' => [
+                ['type' => 'Label', 'caption' => '• 🔧 Schonender für die Geräte: eine Modbus-Verbindung je Abfragezyklus statt einer je einzelner Anfrage. Viele Instanzen am selben Gerät (z. B. Dutzende Wechselrichter hinter einem blue\'Log) erzeugten vorher Tausende kurzlebige Verbindungen — manche Geräte verkraften das schlecht.'],
                 ['type' => 'Label', 'caption' => '• 🆕 Neuer Zählertyp „Meteocontrol blue\'Log SCADA – Datenlogger (Summe, Adresse 97)": Park-Leistung aller Wechselrichter, installierte/aktive Wechselrichter, optional die Leistungsregelung (verfügbare Wirk-/Blindleistung, Sollwert %). Die Gerätesuche bietet Adresse 97 bei jedem blue\'Log mit an. Rein lesend.'],
                 ['type' => 'Label', 'caption' => '• 🆕 Weil das blue\'Log unter 97 keinen Zählerstand liefert, rechnet MeterHub den „Ertrag gesamt (hochgerechnet)" selbst aus der Leistung hoch — Leistung × Zeit, archiviert wie ein echter Zähler. Lücken (Gerät nicht erreichbar, Neustart) werden nicht mit veralteten Werten überbrückt.'],
                 ['type' => 'Label', 'caption' => '• ⚠️🆕 Zwei neue, SCHREIBENDE Zählertypen: „Meteocontrol blue\'Log RPC" (Direktvermarkter) und „… Power Control" (Netzbetreiber). MeterHub kann jetzt einen Sollwert kontinuierlich auf einem blue\'Log-Kontrollkanal halten (relativ % oder absolut W, umschaltbar) — das erste Mal, dass dieses Modul nicht nur liest, sondern auch schreibt. Vor dem Aktivieren unbedingt sicherstellen, dass kein zweites System denselben Kanal bedient.'],
@@ -3101,6 +3181,11 @@ class MeterHub extends IPSModule
         if ($ok && $driver instanceof MHUB_CalculatedEnergyDriverInterface) {
             $this->AdvanceCalculatedEnergy($driver->calculatedEnergy());
         }
+        // Eine Verbindung je Zyklus: Lesen UND Sollwert-Schreiben liefen über
+        // denselben Client, jetzt einmal schließen (siehe MHUB_ModbusTcpClient).
+        if (method_exists($mb, 'close')) {
+            $mb->close();
+        }
         $this->SetStatus($ok ? 102 : 201);
         $this->UpdateMirrors();
     }
@@ -3110,7 +3195,11 @@ class MeterHub extends IPSModule
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-        $this->GetDriver()->readSlow($this->GetTransport(), $this);
+        $mb = $this->GetTransport();
+        $this->GetDriver()->readSlow($mb, $this);
+        if (method_exists($mb, 'close')) {
+            $mb->close();
+        }
         $this->UpdateMirrors();
         $this->MaybeAutoBackfillInexogy();
     }
@@ -3189,9 +3278,13 @@ class MeterHub extends IPSModule
      */
     public function TestConnection(): string
     {
-        $ok = $this->GetDriver()->readFast($this->GetTransport(), $this);
+        $mb = $this->GetTransport();
+        $ok = $this->GetDriver()->readFast($mb, $this);
         $this->SetStatus($ok ? 102 : 201);
-        $this->GetDriver()->readSlow($this->GetTransport(), $this);
+        $this->GetDriver()->readSlow($mb, $this);
+        if (method_exists($mb, 'close')) {
+            $mb->close();
+        }
         $this->UpdateMirrors();
         return $ok
             ? '✅ Verbindung erfolgreich, Werte aktualisiert (' . date('H:i:s') . ' Uhr).'

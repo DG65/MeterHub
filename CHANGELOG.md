@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.26.5-beta.1 (2026-09-12)
+
+- **🔧 Eine Modbus-Verbindung je Abfragezyklus statt je Anfrage.** Live-Befund im
+  Solarpark: Der Symcon-Rechner hatte gleichzeitig 2 666 abgebaute Verbindungen im
+  Wartezustand, davon 2 333 zu einem einzigen blue'Log (.204, 48 MeterHub-Wechselrichter-
+  Instanzen) — rund 20 neue TCP-Verbindungen pro Sekunde, weil jede einzelne Anfrage
+  eine eigene Verbindung öffnete und sofort schloss. Genau schnelles Verbinden/Trennen
+  verkraften blue'Logs nachweislich schlecht (gemessen 09.09.2026).
+  - `MHUB_ModbusTcpClient` hält die Verbindung jetzt für alle Anfragen eines Zyklus
+    (Lesen und das Sollwert-Schreiben der blue'Log-RPC/Power-Control-Typen) offen;
+    MeterHub schließt sie am Ende von Schnell- und Langsam-Zyklus sowie nach
+    „Verbindung testen".
+  - Antworten werden exakt nach Länge gelesen und über die Transaktions-ID zugeordnet.
+  - Bricht eine schon benutzte Verbindung weg, wird einmal neu verbunden; bei
+    Zeitüberschreitung oder Modbus-Exception bewusst nicht (keine doppelten Wartezeiten).
+  - Die Gerätesuche (MeterHubDiscovery) ist nicht betroffen — sie läuft nur auf
+    Knopfdruck und nutzt eigene, bereits parallelisierte Abfragen.
+- Neuer Prüfstand `.tools/test-modbus-client.php` mit echtem Modbus-Server im eigenen
+  Prozess (Verbindungszählung, Verbindungsabbruch, Exception, stummes Gerät, Schreiben).
+
 ## 0.26.4-beta.1 (2026-09-11)
 
 - **🆕 blue'Log-Datenlogger (Adresse 97): Ertrag wird hochgerechnet.** Dietmars Auftrag:
