@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.26.8-beta.1 (2026-09-12)
+
+- **Energie-Archiv prüfen/reparieren: Schalter „Einzelne Rückschritte mitreparieren"**
+  (Standard an). Der Probelauf an Dietmars Inexogy-Zähler fand neben der Nullwert-Lücke
+  524 bzw. 565 einzelne Rückschritte. Sie entstehen, weil Live- und offizielle
+  Viertelstundenwerte im selben Archiv liegen. Dort kann der tiefere Punkt gerade der
+  abrechnungsrelevante offizielle Wert sein, eine Interpolation zwischen Live-Werten
+  wäre also schlechter als das Original. Mit abgeschaltetem Schalter werden Rückschritte
+  nur gezählt und gemeldet, repariert werden ausschließlich Nullwert-Lücken.
+  `MHUB_CheckEnergyArchive`/`MHUB_RepairEnergyArchive` haben dafür einen dritten
+  Parameter.
+
 ## 0.26.7-beta.1 (2026-09-12)
 
 - **Energie-Archiv prüfen/reparieren speicherfest für jeden Nutzer.** Die Prüfung hielt

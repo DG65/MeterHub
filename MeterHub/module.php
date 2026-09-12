@@ -2947,6 +2947,12 @@ class MeterHub extends IPSModule
         // aufzufüllender Lücken (0 = gleichmäßig) und Prüfzeitraum in Tagen.
         $this->RegisterPropertyInteger('RepairReference', 0);
         $this->RegisterPropertyInteger('RepairDays', 14);
+        // Einzelne Rückschritte mitreparieren? Standard ja (bei normalen
+        // Zählern ein Messfehler). Bei Inexogy entstehen sie durch gemischte
+        // Live-/Viertelstundenwerte — dort kann der tiefere Punkt der
+        // offizielle Wert sein (Dietmars Entscheidung 12.09.2026: nur die
+        // Lücke reparieren).
+        $this->RegisterPropertyBoolean('RepairBackward', true);
         $this->RegisterPropertyInteger('IntervalFast', 5);
         $this->RegisterPropertyInteger('IntervalSlow', 60);
         // Archiv-Verdichtung, konfigurierbar statt fest im Code (Dietmars
@@ -3843,8 +3849,9 @@ class MeterHub extends IPSModule
                         ['type' => 'Label', 'caption' => 'Reparatur: ungültige Punkte löschen, die bekannte Menge zwischen dem letzten gültigen Stand davor und dem ersten danach verteilen — nach dem Verlauf eines Referenzzählers am selben Anschluss (welcher seiner Zähler passt, erkennt das Modul selbst an den 24 h davor), sonst gleichmäßig. Die Leistung in solchen Lücken wird aus der aufgefüllten Energie neu berechnet. Lücken ohne gültigen Stand danach (evtl. Zählertausch) bleiben unangetastet.'],
                         ['type' => 'SelectInstance', 'name' => 'RepairReference', 'caption' => 'Referenzzähler für die Form der Lücke (leer = gleichmäßig)'],
                         ['type' => 'NumberSpinner', 'name' => 'RepairDays', 'caption' => 'Zeitraum (höchstens 45 Tage)', 'minimum' => 1, 'maximum' => 45, 'suffix' => ' Tage'],
-                        ['type' => 'Button', 'caption' => '🔎  Prüfen (Probelauf, ändert nichts)', 'onClick' => 'echo MHUB_CheckEnergyArchive($id, $RepairReference, $RepairDays);'],
-                        ['type' => 'Button', 'caption' => '🛠️  Reparieren', 'confirm' => 'Ungültige Archivwerte löschen und die Lücken auffüllen? Vorher den Probelauf ansehen — das Löschen lässt sich nicht rückgängig machen.', 'onClick' => 'echo MHUB_RepairEnergyArchive($id, $RepairReference, $RepairDays);'],
+                        ['type' => 'CheckBox', 'name' => 'RepairBackward', 'caption' => 'Einzelne Rückschritte mitreparieren (bei Cloud-Zählern mit gemischten Live- und Viertelstundenwerten besser aus — der tiefere Punkt kann dort der offizielle Wert sein)'],
+                        ['type' => 'Button', 'caption' => '🔎  Prüfen (Probelauf, ändert nichts)', 'onClick' => 'echo MHUB_CheckEnergyArchive($id, $RepairReference, $RepairDays, $RepairBackward);'],
+                        ['type' => 'Button', 'caption' => '🛠️  Reparieren', 'confirm' => 'Ungültige Archivwerte löschen und die Lücken auffüllen? Vorher den Probelauf ansehen — das Löschen lässt sich nicht rückgängig machen.', 'onClick' => 'echo MHUB_RepairEnergyArchive($id, $RepairReference, $RepairDays, $RepairBackward);'],
                     ],
                 ],
                 [
@@ -4773,14 +4780,14 @@ class MeterHub extends IPSModule
         return $best;
     }
 
-    public function CheckEnergyArchive(int $ReferenceID, int $Days): string
+    public function CheckEnergyArchive(int $ReferenceID, int $Days, bool $WithBackward): string
     {
-        return $this->EnergyArchiveRepair($ReferenceID, $Days, false);
+        return $this->EnergyArchiveRepair($ReferenceID, $Days, false, $WithBackward);
     }
 
-    public function RepairEnergyArchive(int $ReferenceID, int $Days): string
+    public function RepairEnergyArchive(int $ReferenceID, int $Days, bool $WithBackward): string
     {
-        return $this->EnergyArchiveRepair($ReferenceID, $Days, true);
+        return $this->EnergyArchiveRepair($ReferenceID, $Days, true, $WithBackward);
     }
 
     /**
@@ -4793,7 +4800,7 @@ class MeterHub extends IPSModule
      * Zählertausch) und längere Rückschritt-Folgen ohne Nullwerte (unklar,
      * welcher Wert der Ausreißer ist) — beide nur gemeldet.
      */
-    private function EnergyArchiveRepair(int $refId, int $days, bool $apply): string
+    private function EnergyArchiveRepair(int $refId, int $days, bool $apply, bool $withBackward = true): string
     {
         $acs = IPS_GetInstanceListByModuleID('{43192F0B-135B-4CE7-A0A7-1475603F3060}');
         if (count($acs) === 0) {
@@ -4842,6 +4849,7 @@ class MeterHub extends IPSModule
             $add = [];
             $nZero = 0;
             $nBack = 0;
+            $skipBack = 0;
             $notes = [];
             foreach ($spans as $s) {
                 $n = count($s['bad']);
@@ -4853,6 +4861,10 @@ class MeterHub extends IPSModule
                 }
                 if ($s['before'] === null || $s['after'] === null) {
                     $notes[] = "   • $range: ohne gültigen Stand " . ($s['before'] === null ? 'davor' : 'danach') . ' — nicht repariert (evtl. Zählertausch).';
+                    continue;
+                }
+                if (!$s['zero'] && !$withBackward) {
+                    $skipBack += $n;
                     continue;
                 }
                 if (!$s['zero'] && $n > 3) {
@@ -4885,7 +4897,8 @@ class MeterHub extends IPSModule
                     $notes[] = "   • $range: Rückschritt, interpoliert.";
                 }
             }
-            $lines[] = "$label (#$vid): $nZero Nullwert(e), $nBack Rückschritt(e)" . ($spans ? '' : ' — in Ordnung.');
+            $lines[] = "$label (#$vid): $nZero Nullwert(e), $nBack Rückschritt(e)" . ($spans ? '' : ' — in Ordnung.')
+                . ($skipBack > 0 ? ' — davon ' . $skipBack . ' Rückschritt(e) bewusst nicht angefasst (Schalter „Rückschritte mitreparieren“ aus).' : '');
             $lines = array_merge($lines, $notes);
             $plan[$ident] = [$vid, $del, $add];
             // Reparierte Reihe nur rund um Nullwert-Lücken behalten (dafür
